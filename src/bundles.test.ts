@@ -24,6 +24,15 @@ bundle Includes 5 items
 
 Some footer content.`;
 
+const SANITIZED_BUNDLE_PAGE = `
+Title: Save 22% on House Flipper 2 x Spray Paint Simulator on Steam
+
+URL Source: https://store.steampowered.com/bundle/54347?l=english&cc=us
+
+Markdown Content:
+Save 22% on House Flipper 2 x Spray Paint Simulator on Steam
+`;
+
 let bundlesModule: BundlesModule;
 const originalFetch = globalThis.fetch;
 
@@ -135,4 +144,55 @@ test('fetchBundleNames falls back to proxy URLs when direct requests fail due to
   expect(attemptedUrls).toContain(proxyBundleListUrl);
   expect(attemptedUrls).toContain(directBundleUrl('100'));
   expect(attemptedUrls).toContain(proxyBundleUrl('100'));
+});
+
+test('fetchBundleNames extracts titles from sanitized markdown bundle pages', async () => {
+  const { fetchBundleNames } = bundlesModule;
+
+  const appId = '1337';
+  const directBundleListUrl = `https://store.steampowered.com/bundlelist/${appId}`;
+  const directBundleUrl = (bundleId: string) =>
+    `https://store.steampowered.com/bundle/${bundleId}?l=english&cc=us`;
+  const proxyBundleListUrl = `https://r.jina.ai/${directBundleListUrl}`;
+  const proxyBundleUrl = (bundleId: string) => `https://r.jina.ai/${directBundleUrl(bundleId)}`;
+
+  const bundleListHtml = `
+    <a href="https://store.steampowered.com/bundle/54347"></a>
+  `;
+
+  const responses = new Map<string, string>([
+    [proxyBundleListUrl, bundleListHtml],
+    [`https://cors.isomorphic-git.org/${directBundleListUrl}`, bundleListHtml],
+    [proxyBundleUrl('54347'), SANITIZED_BUNDLE_PAGE],
+    [`https://cors.isomorphic-git.org/${directBundleUrl('54347')}`, SANITIZED_BUNDLE_PAGE],
+  ]);
+
+  const fetchMock = vi.fn(async (input: Parameters<typeof fetch>[0]) => {
+    const url =
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+        ? input.href
+        : input instanceof Request
+        ? input.url
+        : input?.toString?.() ?? '';
+
+    if (url.startsWith('https://store.steampowered.com/')) {
+      throw new TypeError(`CORS blocked request to ${url}`);
+    }
+
+    const body = responses.get(url);
+    if (!body) {
+      throw new Error(`Unexpected fetch URL ${url}`);
+    }
+    return new Response(body, { status: 200 });
+  });
+
+  (globalThis as { fetch: typeof fetch }).fetch = fetchMock as unknown as typeof fetch;
+
+  const bundles = await fetchBundleNames(appId);
+
+  expect(bundles).toEqual([
+    { id: '54347', name: 'Save 22% on House Flipper 2 x Spray Paint Simulator on Steam' },
+  ]);
 });

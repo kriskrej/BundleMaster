@@ -186,15 +186,45 @@ async function fetchBundleName(
 ): Promise<string | null> {
   const url = `${BUNDLE_PAGE_URL}${encodeURIComponent(bundleId)}?l=english&cc=us`;
   const { body } = await fetchTextFromSteam(url, `strony bundla ${bundleId}`, reporter);
-  const match = body.match(/<h2[^>]*class="pageheader"[^>]*>([^<]+)<\/h2>/i);
-  if (!match) {
+  const name = extractBundleTitle(body);
+  if (!name) {
     reporter?.log(
-      `Nie znaleziono elementu <h2 class="pageheader"> w treści bundla ${bundleId}.`,
+      `Nie udało się ustalić tytułu bundla ${bundleId} w treści odpowiedzi.`,
       'warning'
     );
     return null;
   }
-  return decodeHtmlEntities(match[1]).trim();
+  return name;
+}
+
+function extractBundleTitle(body: string): string | null {
+  const patterns = [
+    /<h2[^>]*class="pageheader"[^>]*>([^<]+)<\/h2>/i,
+    /<title[^>]*>([^<]+)<\/title>/i,
+    /^\s*Title:\s*(.+)$/im,
+  ];
+
+  for (const pattern of patterns) {
+    const match = body.match(pattern);
+    if (match) {
+      const value = decodeHtmlEntities(match[1]).trim();
+      if (value) {
+        return value;
+      }
+    }
+  }
+
+  const markdownMatch = body.match(/Markdown Content:\s*([\s\S]+)/i);
+  if (markdownMatch) {
+    const content = markdownMatch[1];
+    const lines = content.split(/\r?\n/).map((line) => decodeHtmlEntities(line).trim());
+    const firstLine = lines.find((line) => Boolean(line));
+    if (firstLine) {
+      return firstLine;
+    }
+  }
+
+  return null;
 }
 
 function createLimiter(limit: number) {
