@@ -42,7 +42,21 @@ URL Source: https://store.steampowered.com/bundle/54347?l=english&cc=us
 
 Markdown Content:
 Save 22% on House Flipper 2 x Spray Paint Simulator on Steam
-${SAMPLE_BUNDLE_PAGE_GAMES}
+
+Items included in this bundle
+[![Image 6](https://store.akamai.steamstatic.com/public/images/blank.gif)](https://store.steampowered.com/app/1190970/House_Flipper_2/?snr=1_430_4__431)
+![Image 7](https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1190970/acbf0f91bf304751429b34a1e8232157a961a449/capsule_184x69.jpg?t=1760690929)
+-30%
+$39.99
+$27.99
+House Flipper 2
+
+[![Image 8](https://store.akamai.steamstatic.com/public/images/blank.gif)](https://store.steampowered.com/app/1811340/Spray_Paint_Simulator/?snr=1_430_4__431)
+![Image 9](https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1811340/f5c0aef21e46a5a449cd244328b78969030a3674/capsule_184x69.jpg?t=1749819588)
+$14.99
+Spray Paint Simulator
+
+More like this
 `;
 
 const createBundlePage = (name: string, mainAppId: string, extraAppId: string) => `
@@ -110,6 +124,30 @@ test('extractBundleGamesFromHtml parses tab items with metadata', () => {
       reviewCount: 1234,
       positiveReviewPercent: 91,
       priceUsd: 15.99,
+    },
+  ]);
+});
+
+test('extractBundleGamesFromHtml parses sanitized markdown content when tab items are missing', () => {
+  const { extractBundleGamesFromHtml } = bundlesModule;
+  const games = extractBundleGamesFromHtml(SANITIZED_BUNDLE_PAGE);
+
+  expect(games).toEqual([
+    {
+      appId: '1190970',
+      name: 'House Flipper 2',
+      imageUrl: 'https://steamcdn-a.akamaihd.net/steam/apps/1190970/capsule_184x69.jpg',
+      reviewCount: null,
+      positiveReviewPercent: null,
+      priceUsd: null,
+    },
+    {
+      appId: '1811340',
+      name: 'Spray Paint Simulator',
+      imageUrl: 'https://steamcdn-a.akamaihd.net/steam/apps/1811340/capsule_184x69.jpg',
+      reviewCount: null,
+      positiveReviewPercent: null,
+      priceUsd: null,
     },
   ]);
 });
@@ -272,20 +310,20 @@ test('fetchBundleNames extracts titles from sanitized markdown bundle pages', as
       name: 'Save 22% on House Flipper 2 x Spray Paint Simulator on Steam',
       games: [
         {
-          appId: '111',
-          name: 'Main Game',
-          imageUrl: 'https://cdn.example.com/main.jpg',
-          reviewCount: 4321,
-          positiveReviewPercent: 82,
-          priceUsd: 19.99,
+          appId: '1190970',
+          name: 'House Flipper 2',
+          imageUrl: 'https://steamcdn-a.akamaihd.net/steam/apps/1190970/capsule_184x69.jpg',
+          reviewCount: null,
+          positiveReviewPercent: null,
+          priceUsd: null,
         },
         {
-          appId: '777',
-          name: 'Side Game',
-          imageUrl: 'https://cdn.example.com/side.jpg',
-          reviewCount: 1234,
-          positiveReviewPercent: 91,
-          priceUsd: 15.99,
+          appId: '1811340',
+          name: 'Spray Paint Simulator',
+          imageUrl: 'https://steamcdn-a.akamaihd.net/steam/apps/1811340/capsule_184x69.jpg',
+          reviewCount: null,
+          positiveReviewPercent: null,
+          priceUsd: null,
         },
       ],
     },

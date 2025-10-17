@@ -335,7 +335,104 @@ export function extractBundleGamesFromHtml(html: string): BundleGameInfo[] {
     });
   }
 
+  if (games.length > 0) {
+    return games;
+  }
+
+  const fallbackGames = extractBundleGamesFromSanitizedMarkdown(html);
+  return fallbackGames;
+}
+
+function extractBundleGamesFromSanitizedMarkdown(html: string): BundleGameInfo[] {
+  const markdownIndex = html.indexOf('Markdown Content:');
+  const source = markdownIndex >= 0 ? html.slice(markdownIndex + 'Markdown Content:'.length) : html;
+
+  const lines = source
+    .split(/\r?\n/)
+    .map((line) => decodeHtmlEntities(line).trim());
+
+  if (!lines.length) {
+    return [];
+  }
+
+  const startIndex = lines.findIndex((line) =>
+    line.toLowerCase().includes('items included in this bundle')
+  );
+  const endIndex = lines.findIndex(
+    (line, index) => index > startIndex && line.toLowerCase().startsWith('more like this')
+  );
+
+  const relevantLines =
+    startIndex >= 0
+      ? lines.slice(startIndex + 1, endIndex > startIndex ? endIndex : undefined)
+      : lines;
+
+  const appLinkRegex = /https?:\/\/store\.steampowered\.com\/app\/(\d+)\//i;
+  const seen = new Set<string>();
+  const games: BundleGameInfo[] = [];
+
+  for (let index = 0; index < relevantLines.length; index += 1) {
+    const line = relevantLines[index];
+    const match = line.match(appLinkRegex);
+    if (!match) {
+      continue;
+    }
+
+    const appId = match[1];
+    if (!appId || seen.has(appId)) {
+      continue;
+    }
+
+    const name = extractNameFromSanitizedLines(relevantLines, index + 1);
+
+    games.push({
+      appId,
+      name,
+      imageUrl: `https://steamcdn-a.akamaihd.net/steam/apps/${appId}/capsule_184x69.jpg`,
+      reviewCount: null,
+      positiveReviewPercent: null,
+      priceUsd: null,
+    });
+
+    seen.add(appId);
+  }
+
   return games;
+}
+
+function extractNameFromSanitizedLines(lines: string[], startIndex: number): string | null {
+  for (let index = startIndex; index < lines.length; index += 1) {
+    const candidate = lines[index];
+    if (!candidate) {
+      continue;
+    }
+
+    const normalized = candidate.toLowerCase();
+
+    if (
+      candidate.startsWith('[') ||
+      candidate.startsWith('!') ||
+      candidate.startsWith('-') ||
+      candidate.startsWith('+') ||
+      candidate.startsWith('·') ||
+      candidate.startsWith('•') ||
+      candidate.startsWith('*') ||
+      /^[$€£¥₽]/.test(candidate) ||
+      /^-?\d/.test(candidate) ||
+      normalized.includes('bundle discount') ||
+      normalized.includes('bundle price') ||
+      normalized.includes('add to cart') ||
+      normalized.includes('buy this bundle') ||
+      normalized.includes('view') ||
+      normalized.includes('includes')
+    ) {
+      continue;
+    }
+
+    return candidate;
+  }
+
+  return null;
 }
 
 function extractGameName(innerHtml: string): string | null {
