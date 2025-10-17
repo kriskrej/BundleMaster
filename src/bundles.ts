@@ -2,7 +2,9 @@ const BUNDLE_LIST_URL = 'https://store.steampowered.com/bundlelist/';
 const BUNDLE_PAGE_URL = 'https://store.steampowered.com/bundle/';
 const BUNDLE_LINK_REGEX = /https?:\/\/store\.steampowered\.com\/bundle\/(\d+)/gi;
 
-const isBrowserRuntime = typeof window !== 'undefined' && typeof window.document !== 'undefined';
+function isBrowserRuntime(): boolean {
+  return typeof window !== 'undefined' && typeof window.document !== 'undefined';
+}
 const runtimeProxy = (() => {
   if (typeof import.meta !== 'undefined' && typeof (import.meta as any).env === 'object') {
     const raw = ((import.meta as any).env as { VITE_STEAM_PROXY?: string }).VITE_STEAM_PROXY;
@@ -263,7 +265,7 @@ async function fetchFromSteam(url: string, resourceDescription: string): Promise
 }
 
 function getProxyUrls(url: string): string[] {
-  if (!isBrowserRuntime) {
+  if (!isBrowserRuntime()) {
     return [];
   }
 
