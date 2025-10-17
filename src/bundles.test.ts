@@ -32,7 +32,44 @@ test(
   'fetchBundleNames returns more than five bundles for House Flipper 2',
   { timeout: 30_000 },
   async () => {
-    const bundles = await fetchBundleNames('1190970');
-    expect(bundles.length).toBeGreaterThan(5);
+    try {
+      const bundles = await fetchBundleNames('1190970');
+      expect(bundles.length).toBeGreaterThan(5);
+    } catch (error) {
+      throw new Error(createIntegrationErrorMessage(error));
+    }
   }
 );
+
+function createIntegrationErrorMessage(error: unknown): string {
+  const header = 'Unable to fetch bundles for app 1190970 during integration test.';
+  if (error instanceof Error) {
+    const pieces = [header, `Message: ${error.message}`];
+    if (error.stack) {
+      pieces.push('Stack trace:', indentLines(error.stack));
+    }
+    const cause = (error as { cause?: unknown }).cause;
+    if (cause) {
+      pieces.push('Cause:', indentLines(describe(cause)));
+    }
+    return pieces.join('\n');
+  }
+  return `${header}\nNon-error value thrown: ${String(error)}`;
+}
+
+function indentLines(value: string): string {
+  return value
+    .split('\n')
+    .map((line) => `  ${line}`)
+    .join('\n');
+}
+
+function describe(value: unknown): string {
+  if (value instanceof Error) {
+    const cause = (value as { cause?: unknown }).cause;
+    const causeDescription = cause ? `\nCause:\n${indentLines(describe(cause))}` : '';
+    const stack = value.stack ? `\nStack:\n${indentLines(value.stack)}` : '';
+    return `Error: ${value.message}${stack}${causeDescription}`;
+  }
+  return String(value);
+}
