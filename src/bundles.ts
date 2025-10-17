@@ -1,6 +1,5 @@
-const APP_DETAILS_URL = 'https://store.steampowered.com/api/appdetails';
-const SEARCH_URL =
-  'https://store.steampowered.com/search/results/?query&start=0&count=50&dynamic_data=&sort_by=_ASC&snr=1_7_7_230_7&category1=996&force_infinite=1&l=english&cc=us&term=';
+const BUNDLE_LIST_URL = 'https://store.steampowered.com/bundlelist/';
+const BUNDLE_PAGE_URL = 'https://store.steampowered.com/bundle/';
 
 const isBrowserRuntime = typeof window !== 'undefined' && typeof window.document !== 'undefined';
 const runtimeProxy = (() => {
@@ -37,24 +36,15 @@ export async function fetchBundleNames(appId: string): Promise<BundleInfo[]> {
     throw new Error('AppID is required');
   }
 
-  const appName = await fetchAppName(cleanId);
-  const response = await fetchFromSteam(
-    SEARCH_URL + encodeURIComponent(appName),
-    'bundle search results'
-  );
-  const html = await response.text();
-  return extractBundlesFromHtml(html, cleanId);
-}
-
-async function fetchAppName(appId: string): Promise<string> {
-  const url = `${APP_DETAILS_URL}?appids=${encodeURIComponent(appId)}&cc=us&l=english`;
-  const response = await fetchFromSteam(url, 'app details');
-  const payload = await response.json();
-  const entry = payload?.[appId];
-  if (!entry?.success || !entry?.data?.name) {
-    throw new Error(`Could not resolve app name for ${appId}`);
+  const bundleIds = await fetchBundleIds(cleanId);
+  if (!bundleIds.length) {
+    return [];
   }
-  return entry.data.name as string;
+
+  const bundles = await fetchBundleMetadata(bundleIds);
+  return deduplicateBundles(
+    bundles.filter((bundle): bundle is BundleInfo => Boolean(bundle?.name.trim()))
+  );
 }
 
 export function extractBundlesFromHtml(html: string, appId: string): BundleInfo[] {
@@ -100,6 +90,101 @@ export function extractBundlesFromHtml(html: string, appId: string): BundleInfo[
   }
 
   return deduplicateBundles(bundles);
+}
+
+async function fetchBundleIds(appId: string): Promise<string[]> {
+  const url = `${BUNDLE_LIST_URL}${encodeURIComponent(appId)}`;
+  const response = await fetchFromSteam(url, 'bundle list page');
+  const html = await response.text();
+  const match = html.match(/data-bundle_list="([^"]+)"/i);
+  if (!match) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(match[1]) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .map((id) => String(id).trim())
+      .filter((id) => Boolean(id));
+  } catch (error) {
+    throw new Error('Failed to parse bundle list from bundle list page', { cause: error });
+  }
+}
+
+async function fetchBundleMetadata(bundleIds: string[]): Promise<(BundleInfo | null)[]> {
+  const limiter = createLimiter(4);
+  return Promise.all(
+    bundleIds.map((bundleId) =>
+      limiter(async () => {
+        const bundleName = await fetchBundleName(bundleId);
+        if (!bundleName) {
+          return null;
+        }
+        return { id: bundleId, name: bundleName };
+      })
+    )
+  );
+}
+
+async function fetchBundleName(bundleId: string): Promise<string | null> {
+  const url = `${BUNDLE_PAGE_URL}${encodeURIComponent(bundleId)}?l=english&cc=us`;
+  const response = await fetchFromSteam(url, `bundle ${bundleId}`);
+  const html = await response.text();
+  const match = html.match(/<h2[^>]*class="pageheader"[^>]*>([^<]+)<\/h2>/i);
+  if (!match) {
+    return null;
+  }
+  return decodeHtmlEntities(match[1]).trim();
+}
+
+function createLimiter(limit: number) {
+  if (!Number.isFinite(limit) || limit < 1) {
+    return <T>(task: () => Promise<T>) => task();
+  }
+
+  let active = 0;
+  const queue: Array<() => void> = [];
+
+  const next = () => {
+    while (active < limit && queue.length > 0) {
+      const run = queue.shift();
+      if (!run) {
+        continue;
+      }
+      active += 1;
+      run();
+    }
+  };
+
+  return function enqueue<T>(task: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const execute = () => {
+        let result: Promise<T>;
+        try {
+          result = Promise.resolve(task());
+        } catch (error) {
+          active -= 1;
+          next();
+          reject(error);
+          return;
+        }
+
+        result
+          .then(resolve)
+          .catch(reject)
+          .finally(() => {
+            active -= 1;
+            next();
+          });
+      };
+
+      queue.push(execute);
+      next();
+    });
+  };
 }
 
 function deduplicateBundles(bundles: BundleInfo[]): BundleInfo[] {

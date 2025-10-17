@@ -29,12 +29,22 @@ test('extractBundlesFromHtml filters bundles by app id', () => {
 });
 
 test(
-  'fetchBundleNames returns more than five bundles for House Flipper 2',
+  'fetchBundleNames returns known bundles for House Flipper 2',
   { timeout: 30_000 },
   async () => {
     try {
       const bundles = await fetchBundleNames('1190970');
-      expect(bundles.length).toBeGreaterThan(5);
+      expect(bundles.length).toBeGreaterThanOrEqual(5);
+
+      const expectedNames = [
+        'Tiny Flipper',
+        'Town Flipper',
+        'House Flipper Franchise Bundle',
+      ];
+
+      for (const name of expectedNames) {
+        expect(bundles.some((bundle) => bundle.name === name)).toBe(true);
+      }
     } catch (error) {
       throw new Error(createIntegrationErrorMessage(error));
     }
