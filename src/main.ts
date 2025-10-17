@@ -29,7 +29,16 @@ app.innerHTML = `
 const appIdInput = document.getElementById('appid') as HTMLInputElement;
 const output = document.getElementById('out') as HTMLDivElement;
 
-type Bundle = { id: string; name: string };
+type BundleGame = {
+  appId: string;
+  name: string | null;
+  imageUrl: string | null;
+  reviewCount: number | null;
+  positiveReviewPercent: number | null;
+  priceUsd: number | null;
+};
+
+type Bundle = { id: string; name: string; games: BundleGame[] };
 type LogLevel = 'info' | 'success' | 'warning' | 'error';
 
 type LogEntry = {
@@ -46,6 +55,27 @@ type DetailEntry = {
   body: string;
 };
 
+type ProgressState = {
+  current: number;
+  total: number;
+  message: string;
+};
+
+const formatNumber = (value: number | null) =>
+  typeof value === 'number' && Number.isFinite(value)
+    ? value.toLocaleString('pl-PL')
+    : 'Brak danych';
+
+const formatPercentage = (value: number | null) =>
+  typeof value === 'number' && Number.isFinite(value)
+    ? `${value}%`
+    : 'Brak danych';
+
+const formatPrice = (value: number | null) =>
+  typeof value === 'number' && Number.isFinite(value)
+    ? `$${value.toFixed(2)}`
+    : 'Brak danych';
+
 const escapeHtml = (value: string) =>
   value
     .replace(/&/g, '&amp;')
@@ -61,6 +91,7 @@ const createLogger = (element: HTMLDivElement) => {
   let errorMessage: string | null = null;
   let logEntries: LogEntry[] = [];
   let detailEntries: DetailEntry[] = [];
+  let progress: ProgressState | null = null;
   let counter = 0;
   let lastLogKey: string | null = null;
   const detailKeys = new Set<string>();
@@ -95,6 +126,54 @@ const createLogger = (element: HTMLDivElement) => {
       )
       .join('');
 
+  const renderProgress = () => {
+    if (!progress) {
+      return '';
+    }
+    const total = progress.total > 0 ? progress.total : 1;
+    const ratio = Math.max(0, Math.min(1, progress.current / total));
+    const percent = Math.round(ratio * 100);
+    return `
+      <section class="logger-section">
+        <div class="progress">
+          <div class="progress__header">
+            <h2 class="section-title section-title--compact">Postęp</h2>
+            <span class="progress__value">${percent}%</span>
+          </div>
+          <div class="progress__bar">
+            <div class="progress__bar-fill" style="width: ${percent}%;"></div>
+          </div>
+          <p class="progress__message">${escapeHtml(progress.message)}</p>
+        </div>
+      </section>
+    `;
+  };
+
+  const renderBundleGame = (game: BundleGame) => {
+    const name = game.name ? escapeHtml(game.name) : `Aplikacja #${escapeHtml(game.appId)}`;
+    const imageMarkup = game.imageUrl
+      ? `<img class="bundle-game__image" src="${escapeHtml(game.imageUrl)}" alt="${name}" loading="lazy" />`
+      : `<div class="bundle-game__image bundle-game__image--empty">Brak miniatury</div>`;
+
+    return `
+      <li class="bundle-game">
+        <div class="bundle-game__thumb">${imageMarkup}</div>
+        <div class="bundle-game__content">
+          <div class="bundle-game__title">${name} <span class="bundle-game__appid">(#${escapeHtml(
+            game.appId,
+          )})</span></div>
+          <div class="bundle-game__stats">
+            <span class="bundle-game__stat">Recenzje: ${formatNumber(game.reviewCount)}</span>
+            <span class="bundle-game__stat">Pozytywne: ${formatPercentage(
+              game.positiveReviewPercent,
+            )}</span>
+            <span class="bundle-game__stat">Cena: ${formatPrice(game.priceUsd)}</span>
+          </div>
+        </div>
+      </li>
+    `;
+  };
+
   const renderBundles = () => {
     if (errorMessage) {
       return `<div class="result result--error">${formatText(errorMessage)}</div>`;
@@ -109,17 +188,52 @@ const createLogger = (element: HTMLDivElement) => {
     }
 
     const items = bundles
-      .map(
-        (bundle) => `
+      .map((bundle) => {
+        const gamesMarkup = bundle.games.length
+          ? `<ul class="bundle-game-list">${bundle.games.map(renderBundleGame).join('')}</ul>`
+          : '<div class="bundle-game-list bundle-game-list--empty">Brak dodatkowych gier w tym bundlu.</div>';
+
+        return `
           <li class="bundle-item">
-            <span class="bundle-name">${escapeHtml(bundle.name)}</span>
-            <span class="bundle-id">(#${escapeHtml(bundle.id)})</span>
+            <div class="bundle-header">
+              <span class="bundle-name">${escapeHtml(bundle.name)}</span>
+              <span class="bundle-id">(#${escapeHtml(bundle.id)})</span>
+            </div>
+            ${gamesMarkup}
           </li>
-        `
-      )
+        `;
+      })
       .join('');
 
     return `<ol class="bundle-list">${items}</ol>`;
+  };
+
+  const updateProgress = (value: ProgressState | null) => {
+    if (!value) {
+      progress = null;
+      render();
+      return;
+    }
+
+    const total = Math.max(1, value.total);
+    const current = Math.max(0, Math.min(value.current, total));
+    const message = value.message.trim();
+    const next: ProgressState = {
+      current,
+      total,
+      message: message || 'Przetwarzanie w toku…',
+    };
+
+    const isSame =
+      progress &&
+      progress.current === next.current &&
+      progress.total === next.total &&
+      progress.message === next.message;
+
+    if (!isSame) {
+      progress = next;
+      render();
+    }
   };
 
   const render = () => {
@@ -150,6 +264,7 @@ const createLogger = (element: HTMLDivElement) => {
       </section>
     `
         : '';
+    const progressMarkup = renderProgress();
     const bundlesMarkup = renderBundles();
 
     element.innerHTML = `
@@ -165,6 +280,7 @@ const createLogger = (element: HTMLDivElement) => {
         </details>
       </section>
       ${detailsMarkup}
+      ${progressMarkup}
       <section class="logger-section">
         <h2 class="section-title">Wynik</h2>
         ${bundlesMarkup}
@@ -227,6 +343,7 @@ const createLogger = (element: HTMLDivElement) => {
     errorMessage = null;
     logEntries = [];
     detailEntries = [];
+    progress = null;
     counter = 0;
     lastLogKey = null;
     detailKeys.clear();
@@ -243,6 +360,7 @@ const createLogger = (element: HTMLDivElement) => {
     addDetail,
     setBundles,
     setError,
+    setProgress: updateProgress,
     reset,
   };
 };
@@ -275,6 +393,9 @@ const analyze = async () => {
     detail: (title, body) => {
       logger.addDetail(title, body);
     },
+    progress: (info) => {
+      logger.setProgress(info);
+    },
   };
 
   try {
@@ -289,6 +410,8 @@ const analyze = async () => {
     const message = error instanceof Error ? error.message : 'Nieznany błąd';
     logger.logError('Wystąpił błąd podczas pobierania bundli.');
     logger.setError(message);
+  } finally {
+    logger.setProgress(null);
   }
 };
 
