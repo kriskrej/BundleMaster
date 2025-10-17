@@ -20,7 +20,7 @@ const runtimeProxy = (() => {
   return undefined;
 })();
 
-const FALLBACK_PROXIES = ['https://cors.isomorphic-git.org/'].map(normalizeProxy);
+const FALLBACK_PROXIES = ['https://r.jina.ai/', 'https://cors.isomorphic-git.org/'].map(normalizeProxy);
 
 const TITLE_REGEX = /<span class="title">([^<]+)<\/span>/i;
 const BUNDLE_ANCHOR_REGEX = /<a[^>]*data-ds-bundleid="(\d+)"[^>]*data-ds-bundle-data="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
