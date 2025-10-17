@@ -267,6 +267,56 @@ test('fetchBundleNames extracts titles from sanitized markdown bundle pages', as
     `https://store.steampowered.com/bundle/${bundleId}?l=english&cc=us`;
   const proxyBundleListUrl = `https://r.jina.ai/${directBundleListUrl}`;
   const proxyBundleUrl = (bundleId: string) => `https://r.jina.ai/${directBundleUrl(bundleId)}`;
+  const reviewUrl = (appId: string) =>
+    `https://store.steampowered.com/appreviews/${appId}?json=1&language=all&purchase_type=all&review_type=all&filter=all&num_per_page=0`;
+  const proxyReviewUrl = (appId: string) => `https://r.jina.ai/${reviewUrl(appId)}`;
+
+  const reviewResponses = new Map<string, string>([
+    [
+      proxyReviewUrl('1190970'),
+      JSON.stringify({
+        success: 1,
+        query_summary: {
+          total_reviews: 120,
+          total_positive: 90,
+          total_negative: 30,
+        },
+      }),
+    ],
+    [
+      `https://cors.isomorphic-git.org/${reviewUrl('1190970')}`,
+      JSON.stringify({
+        success: 1,
+        query_summary: {
+          total_reviews: 120,
+          total_positive: 90,
+          total_negative: 30,
+        },
+      }),
+    ],
+    [
+      proxyReviewUrl('1811340'),
+      JSON.stringify({
+        success: 1,
+        query_summary: {
+          total_reviews: 10,
+          total_positive: 7,
+          total_negative: 3,
+        },
+      }),
+    ],
+    [
+      `https://cors.isomorphic-git.org/${reviewUrl('1811340')}`,
+      JSON.stringify({
+        success: 1,
+        query_summary: {
+          total_reviews: 10,
+          total_positive: 7,
+          total_negative: 3,
+        },
+      }),
+    ],
+  ]);
 
   const bundleListHtml = `
     <a href="https://store.steampowered.com/bundle/54347"></a>
@@ -277,6 +327,7 @@ test('fetchBundleNames extracts titles from sanitized markdown bundle pages', as
     [`https://cors.isomorphic-git.org/${directBundleListUrl}`, bundleListHtml],
     [proxyBundleUrl('54347'), SANITIZED_BUNDLE_PAGE],
     [`https://cors.isomorphic-git.org/${directBundleUrl('54347')}`, SANITIZED_BUNDLE_PAGE],
+    ...Array.from(reviewResponses.entries()),
   ]);
 
   const fetchMock = vi.fn(async (input: Parameters<typeof fetch>[0]) => {
@@ -313,16 +364,16 @@ test('fetchBundleNames extracts titles from sanitized markdown bundle pages', as
           appId: '1190970',
           name: 'House Flipper 2',
           imageUrl: 'https://steamcdn-a.akamaihd.net/steam/apps/1190970/capsule_184x69.jpg',
-          reviewCount: null,
-          positiveReviewPercent: null,
+          reviewCount: 120,
+          positiveReviewPercent: 75,
           priceUsd: null,
         },
         {
           appId: '1811340',
           name: 'Spray Paint Simulator',
           imageUrl: 'https://steamcdn-a.akamaihd.net/steam/apps/1811340/capsule_184x69.jpg',
-          reviewCount: null,
-          positiveReviewPercent: null,
+          reviewCount: 10,
+          positiveReviewPercent: 70,
           priceUsd: null,
         },
       ],
