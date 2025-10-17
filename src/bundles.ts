@@ -131,10 +131,7 @@ export function extractBundlesFromHtml(html: string, appId: string): BundleInfo[
 
 async function fetchBundleIds(appId: string, reporter?: BundleFetchReporter): Promise<string[]> {
   const url = `${BUNDLE_LIST_URL}${encodeURIComponent(appId)}`;
-  const { body, url: finalUrl } = await fetchTextFromSteam(url, 'listy bundli', reporter);
-  reporter?.log(
-    `Pobrano listę bundli (${body.length} znaków) z adresu ${finalUrl}.`
-  );
+  const { body } = await fetchTextFromSteam(url, 'listy bundli', reporter);
   const bundleIds = extractBundleIdsFromHtml(body);
   reporter?.log(
     `Wyodrębniono ${bundleIds.length} identyfikatorów bundli z kodu HTML listy.`
@@ -188,10 +185,7 @@ async function fetchBundleName(
   reporter?: BundleFetchReporter
 ): Promise<string | null> {
   const url = `${BUNDLE_PAGE_URL}${encodeURIComponent(bundleId)}?l=english&cc=us`;
-  const { body, url: finalUrl } = await fetchTextFromSteam(url, `strony bundla ${bundleId}`, reporter);
-  reporter?.log(
-    `Pobrano stronę bundla ${bundleId} (${body.length} znaków) z adresu ${finalUrl}.`
-  );
+  const { body } = await fetchTextFromSteam(url, `strony bundla ${bundleId}`, reporter);
   const match = body.match(/<h2[^>]*class="pageheader"[^>]*>([^<]+)<\/h2>/i);
   if (!match) {
     reporter?.log(

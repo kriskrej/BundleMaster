@@ -62,6 +62,8 @@ const createLogger = (element: HTMLDivElement) => {
   let logEntries: LogEntry[] = [];
   let detailEntries: DetailEntry[] = [];
   let counter = 0;
+  let lastLogKey: string | null = null;
+  const detailKeys = new Set<string>();
 
   const renderLogs = () => {
     if (!logEntries.length) {
@@ -81,12 +83,8 @@ const createLogger = (element: HTMLDivElement) => {
       .join('');
   };
 
-  const renderDetails = () => {
-    if (!detailEntries.length) {
-      return '';
-    }
-
-    const items = detailEntries
+  const renderDetailItems = () =>
+    detailEntries
       .map(
         (detail) => `
           <details class="detail-item">
@@ -96,14 +94,6 @@ const createLogger = (element: HTMLDivElement) => {
         `
       )
       .join('');
-
-    return `
-      <section class="logger-section">
-        <h2 class="section-title">Odpowiedzi serwera</h2>
-        <div class="detail-list">${items}</div>
-      </section>
-    `;
-  };
 
   const renderBundles = () => {
     if (errorMessage) {
@@ -133,14 +123,46 @@ const createLogger = (element: HTMLDivElement) => {
   };
 
   const render = () => {
+    const previousStates = new Map<string, boolean>();
+    element
+      .querySelectorAll<HTMLDetailsElement>('[data-section]')
+      .forEach((detailsElement) => {
+        const key = detailsElement.dataset.section;
+        if (key) {
+          previousStates.set(key, detailsElement.open);
+        }
+      });
+
     const logsMarkup = renderLogs();
-    const detailsMarkup = renderDetails();
+    const detailsMarkup =
+      detailEntries.length > 0
+        ? `
+      <section class="logger-section">
+        <details class="collapsible" data-section="responses" ${
+          previousStates.get('responses') ? 'open' : ''
+        }>
+          <summary class="collapsible__summary">
+            <span class="section-title">Odpowiedzi serwera</span>
+            <span class="collapsible__badge">${detailEntries.length}</span>
+          </summary>
+          <div class="detail-list">${renderDetailItems()}</div>
+        </details>
+      </section>
+    `
+        : '';
     const bundlesMarkup = renderBundles();
 
     element.innerHTML = `
       <section class="logger-section">
-        <h2 class="section-title">Logi</h2>
-        <div class="log-list">${logsMarkup}</div>
+        <details class="collapsible" data-section="logs" ${
+          previousStates.get('logs') ? 'open' : ''
+        }>
+          <summary class="collapsible__summary">
+            <span class="section-title">Logi</span>
+            <span class="collapsible__badge">${logEntries.length}</span>
+          </summary>
+          <div class="log-list">${logsMarkup}</div>
+        </details>
       </section>
       ${detailsMarkup}
       <section class="logger-section">
@@ -151,6 +173,12 @@ const createLogger = (element: HTMLDivElement) => {
   };
 
   const addLog = (message: string, level: LogLevel) => {
+    const logKey = `${level}::${message}`;
+    if (lastLogKey === logKey) {
+      return;
+    }
+
+    lastLogKey = logKey;
     logEntries = [
       ...logEntries,
       {
@@ -164,6 +192,12 @@ const createLogger = (element: HTMLDivElement) => {
   };
 
   const addDetail = (title: string, body: string) => {
+    const detailKey = `${title}::${body}`;
+    if (detailKeys.has(detailKey)) {
+      return;
+    }
+
+    detailKeys.add(detailKey);
     detailEntries = [
       ...detailEntries,
       {
@@ -194,6 +228,8 @@ const createLogger = (element: HTMLDivElement) => {
     logEntries = [];
     detailEntries = [];
     counter = 0;
+    lastLogKey = null;
+    detailKeys.clear();
     render();
   };
 
