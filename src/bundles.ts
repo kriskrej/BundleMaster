@@ -1,6 +1,8 @@
 const BUNDLE_LIST_URL = 'https://store.steampowered.com/bundlelist/';
 const BUNDLE_PAGE_URL = 'https://store.steampowered.com/bundle/';
 const BUNDLE_LINK_REGEX = /https?:\/\/store\.steampowered\.com\/bundle\/(\d+)/gi;
+const BUNDLE_ITEM_REGEX =
+  /<a\b([^>]*?)data-ds-appid="(\d+)"([^>]*)>([\s\S]*?)<\/a>/gi;
 
 function isBrowserRuntime(): boolean {
   return typeof window !== 'undefined' && typeof window.document !== 'undefined';
@@ -28,16 +30,33 @@ const FALLBACK_PROXIES = ['https://r.jina.ai/', 'https://cors.isomorphic-git.org
 const TITLE_REGEX = /<span class="title">([^<]+)<\/span>/i;
 const BUNDLE_ANCHOR_REGEX = /<a[^>]*data-ds-bundleid="(\d+)"[^>]*data-ds-bundle-data="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
 
+export interface BundleGameInfo {
+  appId: string;
+  name: string | null;
+  imageUrl: string | null;
+  reviewCount: number | null;
+  positiveReviewPercent: number | null;
+  priceUsd: number | null;
+}
+
 export interface BundleInfo {
   id: string;
   name: string;
+  games: BundleGameInfo[];
 }
 
 export type BundleFetchLogLevel = 'info' | 'success' | 'warning' | 'error';
 
+export interface BundleFetchProgress {
+  current: number;
+  total: number;
+  message: string;
+}
+
 export interface BundleFetchReporter {
   log(message: string, level?: BundleFetchLogLevel): void;
   detail?(title: string, body: string): void;
+  progress?(update: BundleFetchProgress): void;
 }
 
 export interface BundleFetchOptions {
@@ -55,15 +74,37 @@ export async function fetchBundleNames(
 
   const reporter = options.reporter;
   reporter?.log(`Normalizuję AppID: ${cleanId}`);
+  reporter?.progress?.({
+    current: 0,
+    total: 1,
+    message: 'Pobieranie listy bundli…',
+  });
 
   const bundleIds = await fetchBundleIds(cleanId, reporter);
   if (!bundleIds.length) {
     reporter?.log('Nie znaleziono żadnych bundli powiązanych z tym AppID na stronie listy.', 'warning');
+    reporter?.progress?.({ current: 1, total: 1, message: 'Zakończono – brak bundli.' });
     return [];
   }
 
   reporter?.log(`Rozpoczynam pobieranie metadanych dla ${bundleIds.length} bundli.`);
-  const bundles = await fetchBundleMetadata(bundleIds, reporter);
+  const totalProgress = 1 + bundleIds.length;
+  let completedBundles = 0;
+  reporter?.progress?.({
+    current: 1,
+    total: totalProgress,
+    message: 'Przetwarzanie listy bundli…',
+  });
+
+  const bundles = await fetchBundleMetadata(bundleIds, reporter, () => {
+    completedBundles += 1;
+    reporter?.progress?.({
+      current: 1 + completedBundles,
+      total: totalProgress,
+      message: `Pobieranie szczegółów bundli: ${completedBundles}/${bundleIds.length}`,
+    });
+  });
+
   const filtered = bundles.filter((bundle): bundle is BundleInfo => Boolean(bundle?.name.trim()));
   if (filtered.length !== bundles.length) {
     reporter?.log(
@@ -80,8 +121,18 @@ export async function fetchBundleNames(
     );
   }
 
-  reporter?.log(`Zakończono pobieranie bundli. Łącznie ${unique.length} unikalnych pozycji.`, 'success');
-  return unique;
+  const sanitized = unique.map((bundle) => ({
+    ...bundle,
+    games: deduplicateGames(bundle.games).filter((game) => game.appId !== cleanId),
+  }));
+
+  reporter?.log(`Zakończono pobieranie bundli. Łącznie ${sanitized.length} unikalnych pozycji.`, 'success');
+  reporter?.progress?.({
+    current: totalProgress,
+    total: totalProgress,
+    message: 'Zakończono pobieranie bundli.',
+  });
+  return sanitized;
 }
 
 export function extractBundlesFromHtml(html: string, appId: string): BundleInfo[] {
@@ -123,7 +174,7 @@ export function extractBundlesFromHtml(html: string, appId: string): BundleInfo[
       continue;
     }
 
-    bundles.push({ id: bundleId, name });
+    bundles.push({ id: bundleId, name, games: [] });
   }
 
   return deduplicateBundles(bundles);
@@ -149,41 +200,51 @@ async function fetchBundleIds(appId: string, reporter?: BundleFetchReporter): Pr
 
 async function fetchBundleMetadata(
   bundleIds: string[],
-  reporter?: BundleFetchReporter
+  reporter?: BundleFetchReporter,
+  onProgress?: () => void,
 ): Promise<(BundleInfo | null)[]> {
   if (!bundleIds.length) {
     return [];
   }
 
   const limiter = createLimiter(4);
-  let completed = 0;
-  const total = bundleIds.length;
 
   return Promise.all(
     bundleIds.map((bundleId) =>
       limiter(async () => {
         reporter?.log(`Pobieranie danych dla bundla ${bundleId}.`);
-        const bundleName = await fetchBundleName(bundleId, reporter);
-        completed += 1;
-        reporter?.log(`Postęp pobierania metadanych: ${completed}/${total}.`);
-        if (!bundleName) {
+        try {
+          const result = await fetchBundleDetails(bundleId, reporter);
+          if (!result) {
+            reporter?.log(
+              `Nie udało się ustalić nazwy bundla ${bundleId} – brak nagłówka na stronie.`,
+              'warning'
+            );
+            return null;
+          }
           reporter?.log(
-            `Nie udało się ustalić nazwy bundla ${bundleId} – brak nagłówka na stronie.`,
-            'warning'
+            `Zidentyfikowano bundla ${bundleId}: ${result.name} (gry: ${result.games.length}).`,
+            'success'
+          );
+          return result;
+        } catch (error) {
+          reporter?.log(
+            `Nie udało się pobrać szczegółów bundla ${bundleId}: ${describeError(error)}.`,
+            'error'
           );
           return null;
+        } finally {
+          onProgress?.();
         }
-        reporter?.log(`Zidentyfikowano bundla ${bundleId}: ${bundleName}.`, 'success');
-        return { id: bundleId, name: bundleName };
       })
     )
   );
 }
 
-async function fetchBundleName(
+async function fetchBundleDetails(
   bundleId: string,
-  reporter?: BundleFetchReporter
-): Promise<string | null> {
+  reporter?: BundleFetchReporter,
+): Promise<BundleInfo | null> {
   const url = `${BUNDLE_PAGE_URL}${encodeURIComponent(bundleId)}?l=english&cc=us`;
   const { body } = await fetchTextFromSteam(url, `strony bundla ${bundleId}`, reporter);
   const name = extractBundleTitle(body);
@@ -194,7 +255,14 @@ async function fetchBundleName(
     );
     return null;
   }
-  return name;
+  const games = extractBundleGamesFromHtml(body);
+  if (!games.length) {
+    reporter?.log(
+      `Strona bundla ${bundleId} nie zawierała dodatkowych gier lub nie udało się ich zidentyfikować.`,
+      'warning'
+    );
+  }
+  return { id: bundleId, name, games };
 }
 
 function extractBundleTitle(body: string): string | null {
@@ -225,6 +293,152 @@ function extractBundleTitle(body: string): string | null {
   }
 
   return null;
+}
+
+export function extractBundleGamesFromHtml(html: string): BundleGameInfo[] {
+  BUNDLE_ITEM_REGEX.lastIndex = 0;
+  const games: BundleGameInfo[] = [];
+  let match: RegExpExecArray | null;
+
+  while ((match = BUNDLE_ITEM_REGEX.exec(html)) !== null) {
+    const [, leadingAttributes, appId, trailingAttributes, innerHtml] = match;
+    if (!appId) {
+      continue;
+    }
+    const attributes = `${leadingAttributes ?? ''} ${trailingAttributes ?? ''}`;
+    const name = extractGameName(innerHtml);
+    const imageUrl = extractImageUrl(innerHtml);
+    const reviewCount = parseIntegerAttribute(attributes, [
+      'data-ds-review-count',
+      'data-ds-reviewcount',
+      'data-ds-review_count',
+    ]);
+    const positivePercent = parseIntegerAttribute(attributes, [
+      'data-ds-review-percentage',
+      'data-ds-reviewpercent',
+      'data-ds-review_percent',
+      'data-ds-reviewscore',
+    ]);
+    const priceUsd = parsePriceAttribute(attributes, [
+      'data-ds-price-final',
+      'data-ds-price',
+      'data-ds-price-final-usd',
+    ]);
+
+    games.push({
+      appId,
+      name,
+      imageUrl,
+      reviewCount,
+      positiveReviewPercent: positivePercent,
+      priceUsd,
+    });
+  }
+
+  return games;
+}
+
+function extractGameName(innerHtml: string): string | null {
+  const match = innerHtml.match(/class="[^\"]*tab_item_name[^\"]*"[^>]*>([^<]+)/i);
+  if (match) {
+    const value = decodeHtmlEntities(match[1]).trim();
+    if (value) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function extractImageUrl(innerHtml: string): string | null {
+  const match = innerHtml.match(
+    /<img[^>]*class="[^"]*(?:tab_item_cap_img|bundle_capsule_image)[^"]*"[^>]*src="([^"]+)"/i,
+  );
+  if (match) {
+    const value = decodeHtmlEntities(match[1]).trim();
+    if (value) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function parseIntegerAttribute(source: string, names: string[]): number | null {
+  for (const name of names) {
+    const regex = new RegExp(`${name}\\s*=\\s*"([^"]+)"`, 'i');
+    const match = source.match(regex);
+    if (!match) {
+      continue;
+    }
+    const parsed = parseInteger(match[1]);
+    if (parsed !== null) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+function parsePriceAttribute(source: string, names: string[]): number | null {
+  for (const name of names) {
+    const regex = new RegExp(`${name}\\s*=\\s*"([^"]+)"`, 'i');
+    const match = source.match(regex);
+    if (!match) {
+      continue;
+    }
+    const parsed = parsePrice(match[1]);
+    if (parsed !== null) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+function parseInteger(rawValue: string | null | undefined): number | null {
+  if (typeof rawValue !== 'string') {
+    return null;
+  }
+  const sanitized = rawValue.replace(/[^\d-]/g, '');
+  if (!sanitized) {
+    return null;
+  }
+  const numeric = Number(sanitized);
+  if (!Number.isFinite(numeric)) {
+    return null;
+  }
+  return numeric;
+}
+
+function parsePrice(rawValue: string | null | undefined): number | null {
+  if (typeof rawValue !== 'string') {
+    return null;
+  }
+  const trimmed = rawValue.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const hasDecimalSeparator = trimmed.includes('.');
+  const sanitized = trimmed.replace(/[^\d.]/g, '');
+  if (!sanitized) {
+    return null;
+  }
+  const numeric = Number(sanitized);
+  if (!Number.isFinite(numeric)) {
+    return null;
+  }
+  if (hasDecimalSeparator) {
+    return Math.round(numeric * 100) / 100;
+  }
+  return Math.round((numeric / 100) * 100) / 100;
+}
+
+function deduplicateGames(games: BundleGameInfo[]): BundleGameInfo[] {
+  const seen = new Set<string>();
+  return games.filter((game) => {
+    if (seen.has(game.appId)) {
+      return false;
+    }
+    seen.add(game.appId);
+    return true;
+  });
 }
 
 function createLimiter(limit: number) {

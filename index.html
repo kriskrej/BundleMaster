@@ -299,6 +299,56 @@
         word-break: break-word;
       }
 
+      .section-title--compact {
+        margin: 0;
+        font-size: 1.1rem;
+      }
+
+      .progress {
+        border-radius: 12px;
+        border: 1px solid rgba(156, 26, 255, 0.25);
+        background: rgba(20, 23, 34, 0.75);
+        padding: 16px 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .progress__header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .progress__value {
+        font-weight: 700;
+        letter-spacing: 0.05em;
+        color: rgba(244, 245, 251, 0.85);
+      }
+
+      .progress__bar {
+        position: relative;
+        height: 10px;
+        width: 100%;
+        border-radius: 999px;
+        overflow: hidden;
+        background: rgba(156, 26, 255, 0.2);
+      }
+
+      .progress__bar-fill {
+        position: absolute;
+        inset: 0;
+        width: 0;
+        background: linear-gradient(135deg, #ff1e56, #9c1aff);
+        transition: width 0.25s ease;
+      }
+
+      .progress__message {
+        margin: 0;
+        font-size: 0.95rem;
+        color: rgba(244, 245, 251, 0.8);
+      }
+
       .result {
         padding: 18px;
         border-radius: 12px;
@@ -330,8 +380,12 @@
 
       .bundle-item {
         display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
+        flex-direction: column;
+        gap: 12px;
+        padding: 16px;
+        border-radius: 12px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        background: rgba(18, 21, 32, 0.65);
       }
 
       .bundle-name {
@@ -340,6 +394,103 @@
 
       .bundle-id {
         color: rgba(244, 245, 251, 0.6);
+      }
+
+      .bundle-header {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+
+      .bundle-game-list {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .bundle-game-list--empty {
+        padding: 16px;
+        border-radius: 10px;
+        border: 1px dashed rgba(156, 26, 255, 0.25);
+        background: rgba(24, 27, 40, 0.45);
+        color: rgba(244, 245, 251, 0.7);
+        font-size: 0.95rem;
+      }
+
+      .bundle-game {
+        display: flex;
+        gap: 16px;
+        align-items: center;
+        border-radius: 12px;
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        background: rgba(14, 17, 26, 0.65);
+        padding: 12px 16px;
+      }
+
+      .bundle-game__thumb {
+        width: 104px;
+        height: 58px;
+        border-radius: 10px;
+        overflow: hidden;
+        background: rgba(10, 13, 22, 0.85);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid rgba(156, 26, 255, 0.25);
+        flex-shrink: 0;
+      }
+
+      .bundle-game__image {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+      }
+
+      .bundle-game__image--empty {
+        font-size: 0.75rem;
+        color: rgba(244, 245, 251, 0.6);
+        text-align: center;
+        padding: 0 6px;
+      }
+
+      .bundle-game__content {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .bundle-game__title {
+        font-weight: 600;
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+      }
+
+      .bundle-game__appid {
+        font-size: 0.85rem;
+        color: rgba(244, 245, 251, 0.55);
+      }
+
+      .bundle-game__stats {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px 16px;
+        font-size: 0.95rem;
+        color: rgba(244, 245, 251, 0.75);
+      }
+
+      .bundle-game__stat {
+        background: rgba(255, 30, 86, 0.15);
+        border-radius: 999px;
+        padding: 4px 10px;
       }
 
       @media (max-width: 520px) {
@@ -362,6 +513,20 @@
 
         .output {
           min-height: 640px;
+        }
+
+        .bundle-game {
+          flex-direction: column;
+          align-items: stretch;
+        }
+
+        .bundle-game__thumb {
+          width: 100%;
+          height: auto;
+        }
+
+        .bundle-game__image {
+          height: auto;
         }
       }
     </style>

@@ -10,6 +10,17 @@ const SAMPLE_HTML = `
   <span class="title">Other Bundle</span>
 </a>`;
 
+const SAMPLE_BUNDLE_PAGE_GAMES = `
+  <a class="tab_item" data-ds-appid="111" data-ds-review-count="4321" data-ds-review-percentage="82" data-ds-price-final="1999">
+    <div class="tab_item_name">Main Game</div>
+    <img class="tab_item_cap_img" src="https://cdn.example.com/main.jpg" />
+  </a>
+  <a class="tab_item" data-ds-appid="777" data-ds-review-count="1234" data-ds-review-percentage="91" data-ds-price-final="1599">
+    <div class="tab_item_name">Side Game</div>
+    <img class="tab_item_cap_img" src="https://cdn.example.com/side.jpg" />
+  </a>
+`;
+
 const SANITIZED_BUNDLE_LIST = `
 Title: Example Bundle List
 
@@ -31,6 +42,19 @@ URL Source: https://store.steampowered.com/bundle/54347?l=english&cc=us
 
 Markdown Content:
 Save 22% on House Flipper 2 x Spray Paint Simulator on Steam
+${SAMPLE_BUNDLE_PAGE_GAMES}
+`;
+
+const createBundlePage = (name: string, mainAppId: string, extraAppId: string) => `
+  <h2 class="pageheader">${name}</h2>
+  <a class="tab_item" data-ds-appid="${mainAppId}" data-ds-review-count="2222" data-ds-review-percentage="84" data-ds-price-final="2499">
+    <div class="tab_item_name">${name} Base</div>
+    <img class="tab_item_cap_img" src="https://cdn.example.com/${mainAppId}.jpg" />
+  </a>
+  <a class="tab_item" data-ds-appid="${extraAppId}" data-ds-review-count="555" data-ds-review-percentage="93" data-ds-price-final="1299">
+    <div class="tab_item_name">${name} Extra</div>
+    <img class="tab_item_cap_img" src="https://cdn.example.com/${extraAppId}.jpg" />
+  </a>
 `;
 
 let bundlesModule: BundlesModule;
@@ -63,7 +87,31 @@ afterEach(() => {
 test('extractBundlesFromHtml filters bundles by app id', () => {
   const { extractBundlesFromHtml } = bundlesModule;
   const result = extractBundlesFromHtml(SAMPLE_HTML, '111');
-  expect(result).toEqual([{ id: '123', name: 'Sample Bundle' }]);
+  expect(result).toEqual([{ id: '123', name: 'Sample Bundle', games: [] }]);
+});
+
+test('extractBundleGamesFromHtml parses tab items with metadata', () => {
+  const { extractBundleGamesFromHtml } = bundlesModule;
+  const games = extractBundleGamesFromHtml(`<section>${SAMPLE_BUNDLE_PAGE_GAMES}</section>`);
+
+  expect(games).toEqual([
+    {
+      appId: '111',
+      name: 'Main Game',
+      imageUrl: 'https://cdn.example.com/main.jpg',
+      reviewCount: 4321,
+      positiveReviewPercent: 82,
+      priceUsd: 19.99,
+    },
+    {
+      appId: '777',
+      name: 'Side Game',
+      imageUrl: 'https://cdn.example.com/side.jpg',
+      reviewCount: 1234,
+      positiveReviewPercent: 91,
+      priceUsd: 15.99,
+    },
+  ]);
 });
 
 test('extractBundleIdsFromHtml handles sanitized markdown bundle list', () => {
@@ -87,8 +135,8 @@ test('fetchBundleNames falls back to proxy URLs when direct requests fail due to
     <a href="https://store.steampowered.com/bundle/200"></a>
   `;
   const bundleMetadataHtml = new Map([
-    ['100', '<h2 class="pageheader">Proxy Tiny Bundle</h2>'],
-    ['200', '<h2 class="pageheader">Proxy Town Bundle</h2>'],
+    ['100', createBundlePage('Proxy Tiny Bundle', appId, '900')],
+    ['200', createBundlePage('Proxy Town Bundle', appId, '901')],
   ]);
 
   const responses = new Map<string, string>([
@@ -126,8 +174,34 @@ test('fetchBundleNames falls back to proxy URLs when direct requests fail due to
   const bundles = await fetchBundleNames(appId);
 
   expect(bundles).toEqual([
-    { id: '100', name: 'Proxy Tiny Bundle' },
-    { id: '200', name: 'Proxy Town Bundle' },
+    {
+      id: '100',
+      name: 'Proxy Tiny Bundle',
+      games: [
+        {
+          appId: '900',
+          name: 'Proxy Tiny Bundle Extra',
+          imageUrl: 'https://cdn.example.com/900.jpg',
+          reviewCount: 555,
+          positiveReviewPercent: 93,
+          priceUsd: 12.99,
+        },
+      ],
+    },
+    {
+      id: '200',
+      name: 'Proxy Town Bundle',
+      games: [
+        {
+          appId: '901',
+          name: 'Proxy Town Bundle Extra',
+          imageUrl: 'https://cdn.example.com/901.jpg',
+          reviewCount: 555,
+          positiveReviewPercent: 93,
+          priceUsd: 12.99,
+        },
+      ],
+    },
   ]);
 
   const attemptedUrls = fetchMock.mock.calls.map(([input]) =>
@@ -193,6 +267,140 @@ test('fetchBundleNames extracts titles from sanitized markdown bundle pages', as
   const bundles = await fetchBundleNames(appId);
 
   expect(bundles).toEqual([
-    { id: '54347', name: 'Save 22% on House Flipper 2 x Spray Paint Simulator on Steam' },
+    {
+      id: '54347',
+      name: 'Save 22% on House Flipper 2 x Spray Paint Simulator on Steam',
+      games: [
+        {
+          appId: '111',
+          name: 'Main Game',
+          imageUrl: 'https://cdn.example.com/main.jpg',
+          reviewCount: 4321,
+          positiveReviewPercent: 82,
+          priceUsd: 19.99,
+        },
+        {
+          appId: '777',
+          name: 'Side Game',
+          imageUrl: 'https://cdn.example.com/side.jpg',
+          reviewCount: 1234,
+          positiveReviewPercent: 91,
+          priceUsd: 15.99,
+        },
+      ],
+    },
   ]);
+});
+
+test('fetchBundleNames logs errors and continues when some bundle pages fail', async () => {
+  const { fetchBundleNames } = bundlesModule;
+
+  const appId = '5150';
+  const bundleListHtml = `
+    <a href="https://store.steampowered.com/bundle/100"></a>
+    <a href="https://store.steampowered.com/bundle/200"></a>
+  `;
+
+  const fetchMock = vi.fn(async (input: Parameters<typeof fetch>[0]) => {
+    const url =
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+        ? input.href
+        : input instanceof Request
+        ? input.url
+        : input?.toString?.() ?? '';
+
+    if (url.includes('bundlelist')) {
+      return new Response(bundleListHtml, { status: 200 });
+    }
+
+    if (url.includes('bundle/100')) {
+      throw new Error('Bundle 100 failure');
+    }
+
+    if (url.includes('bundle/200')) {
+      return new Response(createBundlePage('Working Bundle', appId, '998'), { status: 200 });
+    }
+
+    throw new Error(`Unexpected fetch URL ${url}`);
+  });
+
+  (globalThis as { fetch: typeof fetch }).fetch = fetchMock as unknown as typeof fetch;
+
+  const logs: Array<{ message: string; level?: string }> = [];
+
+  const bundles = await fetchBundleNames(appId, {
+    reporter: {
+      log(message, level) {
+        logs.push({ message, level });
+      },
+    },
+  });
+
+  expect(bundles).toEqual([
+    {
+      id: '200',
+      name: 'Working Bundle',
+      games: [
+        {
+          appId: '998',
+          name: 'Working Bundle Extra',
+          imageUrl: 'https://cdn.example.com/998.jpg',
+          reviewCount: 555,
+          positiveReviewPercent: 93,
+          priceUsd: 12.99,
+        },
+      ],
+    },
+  ]);
+
+  expect(logs.some((entry) => entry.level === 'error' && entry.message.includes('100'))).toBe(true);
+});
+
+test('fetchBundleNames reports progress updates while fetching bundles', async () => {
+  const { fetchBundleNames } = bundlesModule;
+
+  const appId = '9090';
+  const bundleListHtml = `<a href="https://store.steampowered.com/bundle/300"></a>`;
+  const bundlePageHtml = createBundlePage('Progress Bundle', appId, '301');
+
+  const fetchMock = vi.fn(async (input: Parameters<typeof fetch>[0]) => {
+    const url =
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+        ? input.href
+        : input instanceof Request
+        ? input.url
+        : input?.toString?.() ?? '';
+
+    if (url.includes('bundlelist')) {
+      return new Response(bundleListHtml, { status: 200 });
+    }
+
+    if (url.includes('bundle/300')) {
+      return new Response(bundlePageHtml, { status: 200 });
+    }
+
+    throw new Error(`Unexpected fetch URL ${url}`);
+  });
+
+  (globalThis as { fetch: typeof fetch }).fetch = fetchMock as unknown as typeof fetch;
+
+  const progressUpdates: Array<{ current: number; total: number; message: string }> = [];
+
+  await fetchBundleNames(appId, {
+    reporter: {
+      log() {},
+      progress(update) {
+        progressUpdates.push(update);
+      },
+    },
+  });
+
+  expect(progressUpdates.length).toBeGreaterThan(0);
+  const lastUpdate = progressUpdates[progressUpdates.length - 1];
+  expect(lastUpdate.current).toBe(lastUpdate.total);
+  expect(typeof lastUpdate.message).toBe('string');
 });
