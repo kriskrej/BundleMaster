@@ -1,13 +1,36 @@
+const DEFAULT_APP_ID = '1190970';
+
 const app = document.getElementById('app')!;
 app.innerHTML = `
-  <h1>Steam Bundle Analyzer</h1>
-  <p>Wpisz AppID i kliknij „Analizuj”.</p>
-  <input id="appid" placeholder="np. 1190970" />
-  <button id="go">Analizuj</button>
-  <pre id="out"></pre>
+  <div class="app-container">
+    <h1 class="title">Steam Bundle Analyzer</h1>
+    <p class="subtitle">Wpisz AppID i kliknij „Analizuj”.</p>
+    <div class="input-group">
+      <input
+        id="appid"
+        class="appid-input"
+        placeholder="np. ${DEFAULT_APP_ID}"
+        value="${DEFAULT_APP_ID}"
+      />
+      <button id="go" class="analyze-button">Analizuj</button>
+    </div>
+    <pre id="out" class="output">Oczekiwanie na analizę…</pre>
+  </div>
 `;
-document.getElementById('go')!.addEventListener('click', async () => {
-  const id = (document.getElementById('appid') as HTMLInputElement).value.trim();
-  (document.getElementById('out') as HTMLPreElement).textContent =
-    id ? `TODO: fetch bundlelist/${id}` : 'Podaj AppID';
+
+const appIdInput = document.getElementById('appid') as HTMLInputElement;
+const output = document.getElementById('out') as HTMLPreElement;
+
+const analyze = async () => {
+  const id = appIdInput.value.trim() || DEFAULT_APP_ID;
+  appIdInput.value = id;
+  output.textContent = `TODO: fetch bundlelist/${id}`;
+};
+
+document.getElementById('go')!.addEventListener('click', analyze);
+
+appIdInput.addEventListener('keydown', (event: KeyboardEvent) => {
+  if (event.key === 'Enter') {
+    analyze();
+  }
 });
