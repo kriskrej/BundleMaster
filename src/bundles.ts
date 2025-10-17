@@ -1,5 +1,6 @@
 const BUNDLE_LIST_URL = 'https://store.steampowered.com/bundlelist/';
 const BUNDLE_PAGE_URL = 'https://store.steampowered.com/bundle/';
+const APP_REVIEWS_URL = 'https://store.steampowered.com/appreviews/';
 const BUNDLE_LINK_REGEX = /https?:\/\/store\.steampowered\.com\/bundle\/(\d+)/gi;
 const BUNDLE_ITEM_REGEX =
   /<a\b([^>]*?)data-ds-appid="(\d+)"([^>]*)>([\s\S]*?)<\/a>/gi;
@@ -67,6 +68,15 @@ export interface BundleFetchReporter {
 export interface BundleFetchOptions {
   reporter?: BundleFetchReporter;
 }
+
+interface GameReviewSummary {
+  reviewCount: number | null;
+  positiveReviewPercent: number | null;
+}
+
+const reviewSummaryCache = new Map<string, GameReviewSummary | null>();
+const reviewSummaryPromises = new Map<string, Promise<GameReviewSummary | null>>();
+const reviewFetchLimiter = createLimiter(4);
 
 export async function fetchBundleNames(
   appId: string,
@@ -312,13 +322,14 @@ async function fetchBundleDetails(
     return null;
   }
   const games = extractBundleGamesFromHtml(body);
+  const gamesWithReviews = await populateGameReviewData(games, reporter);
   if (!games.length) {
     reporter?.log(
       `Strona bundla ${bundleId} nie zawierała dodatkowych gier lub nie udało się ich zidentyfikować.`,
       'warning'
     );
   }
-  return { id: bundleId, name, games };
+  return { id: bundleId, name, games: gamesWithReviews };
 }
 
 function extractBundleTitle(body: string): string | null {
@@ -397,6 +408,171 @@ export function extractBundleGamesFromHtml(html: string): BundleGameInfo[] {
 
   const fallbackGames = extractBundleGamesFromSanitizedMarkdown(html);
   return fallbackGames;
+}
+
+async function populateGameReviewData(
+  games: BundleGameInfo[],
+  reporter?: BundleFetchReporter,
+): Promise<BundleGameInfo[]> {
+  if (!games.length) {
+    return games;
+  }
+
+  const gamesMissingReviews = games.filter(
+    (game) => game.reviewCount === null || game.positiveReviewPercent === null,
+  );
+
+  if (!gamesMissingReviews.length) {
+    return games;
+  }
+
+  const uniqueAppIds = Array.from(new Set(gamesMissingReviews.map((game) => game.appId))).filter(
+    Boolean,
+  );
+
+  if (!uniqueAppIds.length) {
+    return games;
+  }
+
+  const summaries = await Promise.all(
+    uniqueAppIds.map(async (appId) => ({ appId, summary: await fetchGameReviewSummary(appId, reporter) })),
+  );
+
+  const summaryByAppId = new Map<string, GameReviewSummary | null>();
+  for (const { appId, summary } of summaries) {
+    summaryByAppId.set(appId, summary);
+  }
+
+  return games.map((game) => {
+    const summary = summaryByAppId.get(game.appId);
+    if (!summary) {
+      return game;
+    }
+
+    const reviewCount = game.reviewCount ?? summary.reviewCount ?? null;
+    const positiveReviewPercent =
+      game.positiveReviewPercent ?? summary.positiveReviewPercent ?? null;
+
+    if (reviewCount === game.reviewCount && positiveReviewPercent === game.positiveReviewPercent) {
+      return game;
+    }
+
+    return {
+      ...game,
+      reviewCount,
+      positiveReviewPercent,
+    };
+  });
+}
+
+async function fetchGameReviewSummary(
+  appId: string,
+  reporter?: BundleFetchReporter,
+): Promise<GameReviewSummary | null> {
+  if (reviewSummaryCache.has(appId)) {
+    return reviewSummaryCache.get(appId) ?? null;
+  }
+
+  const existingPromise = reviewSummaryPromises.get(appId);
+  if (existingPromise) {
+    return existingPromise;
+  }
+
+  const task = reviewFetchLimiter(async () => {
+    try {
+      const url =
+        `${APP_REVIEWS_URL}${encodeURIComponent(appId)}` +
+        '?json=1&language=all&purchase_type=all&review_type=all&filter=all&num_per_page=0';
+      const { body } = await fetchTextFromSteam(
+        url,
+        `podsumowania recenzji gry ${appId}`,
+        reporter,
+      );
+      const parsed = JSON.parse(body) as unknown;
+      const summary = extractQuerySummary(parsed);
+      if (!summary) {
+        reporter?.log(
+          `Odpowiedź z recenzjami gry ${appId} nie zawierała wymaganych danych (query_summary).`,
+          'warning',
+        );
+        return null;
+      }
+
+      const totalPositive = coerceToNumber(summary['total_positive']);
+      const totalNegative = coerceToNumber(summary['total_negative']);
+      let totalReviews = coerceToNumber(summary['total_reviews']);
+
+      if (totalReviews === null && totalPositive !== null && totalNegative !== null) {
+        totalReviews = totalPositive + totalNegative;
+      }
+
+      const reviewCount = totalReviews !== null ? Math.round(totalReviews) : null;
+      let positiveReviewPercent: number | null = null;
+
+      if (totalReviews !== null && totalReviews > 0 && totalPositive !== null) {
+        positiveReviewPercent = Math.round((totalPositive / totalReviews) * 100);
+        if (!Number.isFinite(positiveReviewPercent)) {
+          positiveReviewPercent = null;
+        } else {
+          positiveReviewPercent = Math.max(0, Math.min(100, positiveReviewPercent));
+        }
+      }
+
+      return {
+        reviewCount,
+        positiveReviewPercent,
+      };
+    } catch (error) {
+      reporter?.log(
+        `Nie udało się pobrać recenzji dla gry ${appId}: ${describeError(error)}`,
+        'warning',
+      );
+      return null;
+    }
+  });
+
+  reviewSummaryPromises.set(appId, task);
+
+  try {
+    const result = await task;
+    reviewSummaryCache.set(appId, result);
+    return result;
+  } finally {
+    reviewSummaryPromises.delete(appId);
+  }
+}
+
+function extractQuerySummary(source: unknown): Record<string, unknown> | null {
+  if (!source || typeof source !== 'object') {
+    return null;
+  }
+
+  const candidate = (source as { query_summary?: unknown }).query_summary;
+  if (!candidate || typeof candidate !== 'object') {
+    return null;
+  }
+
+  return candidate as Record<string, unknown>;
+}
+
+function coerceToNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    const numeric = Number(trimmed);
+    if (Number.isFinite(numeric)) {
+      return numeric;
+    }
+  }
+
+  return null;
 }
 
 function extractBundleGamesFromSanitizedMarkdown(html: string): BundleGameInfo[] {
