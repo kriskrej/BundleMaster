@@ -1,7 +1,6 @@
-import process from 'node:process';
-import { beforeAll, expect, test } from 'vitest';
-import { ProxyAgent, setGlobalDispatcher } from 'undici';
-import { extractBundleIdsFromHtml, extractBundlesFromHtml, fetchBundleNames } from './bundles';
+import { beforeAll, afterEach, expect, test, vi } from 'vitest';
+
+type BundlesModule = typeof import('./bundles');
 
 const SAMPLE_HTML = `
 <a data-ds-bundleid="123" data-ds-bundle-data="{&quot;m_rgItems&quot;:[{&quot;m_rgIncludedAppIDs&quot;:[111]}]}">
@@ -25,80 +24,115 @@ bundle Includes 5 items
 
 Some footer content.`;
 
-beforeAll(() => {
-  const proxyUrl =
-    process.env.HTTPS_PROXY ??
-    process.env.https_proxy ??
-    process.env.HTTP_PROXY ??
-    process.env.http_proxy;
+let bundlesModule: BundlesModule;
+const originalFetch = globalThis.fetch;
 
-  if (proxyUrl) {
-    setGlobalDispatcher(new ProxyAgent(proxyUrl));
+beforeAll(async () => {
+  const globalObject = globalThis as {
+    window?: { document?: unknown };
+    document?: unknown;
+  };
+
+  if (!globalObject.window) {
+    globalObject.window = { document: {} };
+  } else if (!globalObject.window.document) {
+    globalObject.window.document = {};
   }
+
+  if (!globalObject.document) {
+    globalObject.document = globalObject.window.document;
+  }
+
+  bundlesModule = await import('./bundles');
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  globalThis.fetch = originalFetch;
 });
 
 test('extractBundlesFromHtml filters bundles by app id', () => {
+  const { extractBundlesFromHtml } = bundlesModule;
   const result = extractBundlesFromHtml(SAMPLE_HTML, '111');
   expect(result).toEqual([{ id: '123', name: 'Sample Bundle' }]);
 });
 
 test('extractBundleIdsFromHtml handles sanitized markdown bundle list', () => {
+  const { extractBundleIdsFromHtml } = bundlesModule;
   const ids = extractBundleIdsFromHtml(SANITIZED_BUNDLE_LIST);
   expect(ids).toEqual(['12345', '67890']);
 });
 
-test(
-  'fetchBundleNames returns known bundles for House Flipper 2',
-  { timeout: 30_000 },
-  async () => {
-    try {
-      const bundles = await fetchBundleNames('1190970');
-      expect(bundles.length).toBeGreaterThanOrEqual(5);
+test('fetchBundleNames falls back to proxy URLs when direct requests fail due to CORS', async () => {
+  const { fetchBundleNames } = bundlesModule;
 
-      const expectedNames = [
-        'Tiny Flipper',
-        'Town Flipper',
-        'House Flipper Franchise Bundle',
-      ];
+  const appId = '4242';
+  const directBundleListUrl = `https://store.steampowered.com/bundlelist/${appId}`;
+  const directBundleUrl = (bundleId: string) =>
+    `https://store.steampowered.com/bundle/${bundleId}?l=english&cc=us`;
+  const proxyBundleListUrl = `https://r.jina.ai/${directBundleListUrl}`;
+  const proxyBundleUrl = (bundleId: string) => `https://r.jina.ai/${directBundleUrl(bundleId)}`;
 
-      for (const name of expectedNames) {
-        expect(bundles.some((bundle) => bundle.name === name)).toBe(true);
-      }
-    } catch (error) {
-      throw new Error(createIntegrationErrorMessage(error));
+  const bundleListHtml = `
+    <a href="https://store.steampowered.com/bundle/100"></a>
+    <a href="https://store.steampowered.com/bundle/200"></a>
+  `;
+  const bundleMetadataHtml = new Map([
+    ['100', '<h2 class="pageheader">Proxy Tiny Bundle</h2>'],
+    ['200', '<h2 class="pageheader">Proxy Town Bundle</h2>'],
+  ]);
+
+  const responses = new Map<string, string>([
+    [proxyBundleListUrl, bundleListHtml],
+    [`https://cors.isomorphic-git.org/${directBundleListUrl}`, bundleListHtml],
+    ...Array.from(bundleMetadataHtml.entries()).flatMap(([bundleId, html]) => [
+      [proxyBundleUrl(bundleId), html],
+      [`https://cors.isomorphic-git.org/${directBundleUrl(bundleId)}`, html],
+    ] as [string, string]),
+  ]);
+
+  const fetchMock = vi.fn(async (input: Parameters<typeof fetch>[0]) => {
+    const url =
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+        ? input.href
+        : input instanceof Request
+        ? input.url
+        : input?.toString?.() ?? '';
+
+    if (url.startsWith('https://store.steampowered.com/')) {
+      throw new TypeError(`CORS blocked request to ${url}`);
     }
-  }
-);
 
-function createIntegrationErrorMessage(error: unknown): string {
-  const header = 'Unable to fetch bundles for app 1190970 during integration test.';
-  if (error instanceof Error) {
-    const pieces = [header, `Message: ${error.message}`];
-    if (error.stack) {
-      pieces.push('Stack trace:', indentLines(error.stack));
+    const body = responses.get(url);
+    if (!body) {
+      throw new Error(`Unexpected fetch URL ${url}`);
     }
-    const cause = (error as { cause?: unknown }).cause;
-    if (cause) {
-      pieces.push('Cause:', indentLines(describe(cause)));
-    }
-    return pieces.join('\n');
-  }
-  return `${header}\nNon-error value thrown: ${String(error)}`;
-}
+    return new Response(body, { status: 200 });
+  });
 
-function indentLines(value: string): string {
-  return value
-    .split('\n')
-    .map((line) => `  ${line}`)
-    .join('\n');
-}
+  (globalThis as { fetch: typeof fetch }).fetch = fetchMock as unknown as typeof fetch;
 
-function describe(value: unknown): string {
-  if (value instanceof Error) {
-    const cause = (value as { cause?: unknown }).cause;
-    const causeDescription = cause ? `\nCause:\n${indentLines(describe(cause))}` : '';
-    const stack = value.stack ? `\nStack:\n${indentLines(value.stack)}` : '';
-    return `Error: ${value.message}${stack}${causeDescription}`;
-  }
-  return String(value);
-}
+  const bundles = await fetchBundleNames(appId);
+
+  expect(bundles).toEqual([
+    { id: '100', name: 'Proxy Tiny Bundle' },
+    { id: '200', name: 'Proxy Town Bundle' },
+  ]);
+
+  const attemptedUrls = fetchMock.mock.calls.map(([input]) =>
+    typeof input === 'string'
+      ? input
+      : input instanceof URL
+      ? input.href
+      : input instanceof Request
+      ? input.url
+      : input?.toString?.() ?? ''
+  );
+
+  expect(attemptedUrls).toContain(directBundleListUrl);
+  expect(attemptedUrls).toContain(proxyBundleListUrl);
+  expect(attemptedUrls).toContain(directBundleUrl('100'));
+  expect(attemptedUrls).toContain(proxyBundleUrl('100'));
+});
