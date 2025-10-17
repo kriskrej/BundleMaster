@@ -442,3 +442,71 @@ test('fetchBundleNames reports progress updates while fetching bundles', async (
   expect(lastUpdate.current).toBe(lastUpdate.total);
   expect(typeof lastUpdate.message).toBe('string');
 });
+
+test('fetchBundleNames emits bundle updates during processing', async () => {
+  const { fetchBundleNames } = bundlesModule;
+
+  const appId = '5151';
+  const bundleListHtml = `
+    <a href="https://store.steampowered.com/bundle/400"></a>
+    <a href="https://store.steampowered.com/bundle/401"></a>
+  `;
+
+  const responses = new Map<string, string>([
+    [
+      'https://store.steampowered.com/bundlelist/5151',
+      bundleListHtml,
+    ],
+    [
+      'https://store.steampowered.com/bundle/400?l=english&cc=us',
+      createBundlePage('First Async Bundle', appId, '910'),
+    ],
+    [
+      'https://store.steampowered.com/bundle/401?l=english&cc=us',
+      createBundlePage('Second Async Bundle', appId, '911'),
+    ],
+  ]);
+
+  const fetchMock = vi.fn(async (input: Parameters<typeof fetch>[0]) => {
+    const url =
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+        ? input.href
+        : input instanceof Request
+        ? input.url
+        : input?.toString?.() ?? '';
+
+    if (!responses.has(url)) {
+      throw new Error(`Unexpected fetch URL ${url}`);
+    }
+
+    if (url.includes('/bundle/401')) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    const body = responses.get(url)!;
+    return new Response(body, { status: 200 });
+  });
+
+  (globalThis as { fetch: typeof fetch }).fetch = fetchMock as unknown as typeof fetch;
+
+  const bundleUpdates: Array<{ bundles: Array<{ id: string }>; final: boolean }> = [];
+
+  await fetchBundleNames(appId, {
+    reporter: {
+      log() {},
+      bundles(bundles, context) {
+        bundleUpdates.push({ bundles: bundles.map(({ id }) => ({ id })), final: context.isFinal });
+      },
+    },
+  });
+
+  expect(bundleUpdates.length).toBeGreaterThan(0);
+  const finalUpdate = bundleUpdates[bundleUpdates.length - 1];
+  expect(finalUpdate.final).toBe(true);
+  expect(finalUpdate.bundles.map((bundle) => bundle.id)).toEqual(['400', '401']);
+  expect(
+    bundleUpdates.some((update) => !update.final && update.bundles.length === 1 && update.bundles[0].id === '400')
+  ).toBe(true);
+});

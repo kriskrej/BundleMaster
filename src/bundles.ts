@@ -53,10 +53,15 @@ export interface BundleFetchProgress {
   message: string;
 }
 
+export interface BundleUpdateContext {
+  isFinal: boolean;
+}
+
 export interface BundleFetchReporter {
   log(message: string, level?: BundleFetchLogLevel): void;
   detail?(title: string, body: string): void;
   progress?(update: BundleFetchProgress): void;
+  bundles?(bundles: BundleInfo[], context: BundleUpdateContext): void;
 }
 
 export interface BundleFetchOptions {
@@ -96,13 +101,47 @@ export async function fetchBundleNames(
     message: 'Przetwarzanie listy bundli…',
   });
 
-  const bundles = await fetchBundleMetadata(bundleIds, reporter, () => {
-    completedBundles += 1;
-    reporter?.progress?.({
-      current: 1 + completedBundles,
-      total: totalProgress,
-      message: `Pobieranie szczegółów bundli: ${completedBundles}/${bundleIds.length}`,
+  const bundleOrder = new Map<string, number>();
+  bundleIds.forEach((bundleId, index) => {
+    bundleOrder.set(bundleId, index);
+  });
+
+  const interimBundles = new Map<string, BundleInfo>();
+  const emitBundles = (list: BundleInfo[], isFinal: boolean) => {
+    if (!reporter?.bundles) {
+      return;
+    }
+    const sorted = [...list].sort((a, b) => {
+      const orderA = bundleOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER;
+      const orderB = bundleOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER;
+      return orderA - orderB;
     });
+    reporter.bundles(sorted, { isFinal });
+  };
+
+  const bundles = await fetchBundleMetadata(bundleIds, reporter, {
+    onProgress: () => {
+      completedBundles += 1;
+      reporter?.progress?.({
+        current: 1 + completedBundles,
+        total: totalProgress,
+        message: `Pobieranie szczegółów bundli: ${completedBundles}/${bundleIds.length}`,
+      });
+    },
+    onBundle: (bundle) => {
+      if (!bundle || !bundle.name.trim()) {
+        return;
+      }
+      const sanitizedGames = deduplicateGames(bundle.games).filter((game) => game.appId !== cleanId);
+      const sanitizedBundle: BundleInfo = {
+        ...bundle,
+        games: sanitizedGames,
+      };
+      interimBundles.set(sanitizedBundle.id, sanitizedBundle);
+      if (interimBundles.size > 0) {
+        emitBundles(Array.from(interimBundles.values()), false);
+      }
+    },
   });
 
   const filtered = bundles.filter((bundle): bundle is BundleInfo => Boolean(bundle?.name.trim()));
@@ -121,10 +160,16 @@ export async function fetchBundleNames(
     );
   }
 
-  const sanitized = unique.map((bundle) => ({
-    ...bundle,
-    games: deduplicateGames(bundle.games).filter((game) => game.appId !== cleanId),
-  }));
+  const sanitized = unique
+    .map((bundle) => ({
+      ...bundle,
+      games: deduplicateGames(bundle.games).filter((game) => game.appId !== cleanId),
+    }))
+    .sort((a, b) => {
+      const orderA = bundleOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER;
+      const orderB = bundleOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER;
+      return orderA - orderB;
+    });
 
   reporter?.log(`Zakończono pobieranie bundli. Łącznie ${sanitized.length} unikalnych pozycji.`, 'success');
   reporter?.progress?.({
@@ -132,6 +177,7 @@ export async function fetchBundleNames(
     total: totalProgress,
     message: 'Zakończono pobieranie bundli.',
   });
+  emitBundles(sanitized, true);
   return sanitized;
 }
 
@@ -198,23 +244,30 @@ async function fetchBundleIds(appId: string, reporter?: BundleFetchReporter): Pr
   return bundleIds;
 }
 
+interface BundleMetadataCallbacks {
+  onProgress?: () => void;
+  onBundle?: (bundle: BundleInfo | null) => void;
+}
+
 async function fetchBundleMetadata(
   bundleIds: string[],
   reporter?: BundleFetchReporter,
-  onProgress?: () => void,
+  callbacks: BundleMetadataCallbacks = {},
 ): Promise<(BundleInfo | null)[]> {
   if (!bundleIds.length) {
     return [];
   }
 
   const limiter = createLimiter(4);
+  const { onProgress, onBundle } = callbacks;
 
   return Promise.all(
     bundleIds.map((bundleId) =>
       limiter(async () => {
         reporter?.log(`Pobieranie danych dla bundla ${bundleId}.`);
+        let result: BundleInfo | null = null;
         try {
-          const result = await fetchBundleDetails(bundleId, reporter);
+          result = await fetchBundleDetails(bundleId, reporter);
           if (!result) {
             reporter?.log(
               `Nie udało się ustalić nazwy bundla ${bundleId} – brak nagłówka na stronie.`,
@@ -234,6 +287,9 @@ async function fetchBundleMetadata(
           );
           return null;
         } finally {
+          if (result) {
+            onBundle?.(result);
+          }
           onProgress?.();
         }
       })

@@ -1,4 +1,4 @@
-import { fetchBundleNames, type BundleFetchReporter } from './bundles';
+import { fetchBundleNames, type BundleFetchReporter, type BundleInfo } from './bundles';
 
 const DEFAULT_APP_ID = '1190970';
 const APP_VERSION = '1.1.0';
@@ -326,7 +326,12 @@ const createLogger = (element: HTMLDivElement) => {
     render();
   };
 
-  const setBundles = (bundleList: Bundle[]) => {
+  const setBundles = (bundleList: Bundle[], options: { isFinal?: boolean } = {}) => {
+    const { isFinal = false } = options;
+    if (!isFinal && bundleList.length === 0) {
+      return;
+    }
+
     bundles = bundleList;
     errorMessage = null;
     render();
@@ -390,6 +395,14 @@ const analyze = async () => {
           logger.logInfo(message);
       }
     },
+    bundles: (bundleList: BundleInfo[], context) => {
+      const normalizedBundles: Bundle[] = bundleList.map((bundle) => ({
+        id: bundle.id,
+        name: bundle.name,
+        games: bundle.games.map((game) => ({ ...game })),
+      }));
+      logger.setBundles(normalizedBundles, { isFinal: context.isFinal });
+    },
     detail: (title, body) => {
       logger.addDetail(title, body);
     },
@@ -405,7 +418,7 @@ const analyze = async () => {
     } else {
       logger.logWarning('Źródła nie zwróciły żadnych bundli dla tego AppID.');
     }
-    logger.setBundles(bundles);
+    logger.setBundles(bundles, { isFinal: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Nieznany błąd';
     logger.logError('Wystąpił błąd podczas pobierania bundli.');
