@@ -1,3 +1,5 @@
+import { fetchBundleNames } from './bundles';
+
 const DEFAULT_APP_ID = '1190970';
 
 const app = document.getElementById('app')!;
@@ -21,10 +23,28 @@ app.innerHTML = `
 const appIdInput = document.getElementById('appid') as HTMLInputElement;
 const output = document.getElementById('out') as HTMLPreElement;
 
+const formatBundles = (bundles: { id: string; name: string }[]) => {
+  if (!bundles.length) {
+    return 'Brak bundli powiązanych z tą grą.';
+  }
+
+  return bundles
+    .map((bundle, index) => `${index + 1}. ${bundle.name} (Bundle ${bundle.id})`)
+    .join('\n');
+};
+
 const analyze = async () => {
   const id = appIdInput.value.trim() || DEFAULT_APP_ID;
   appIdInput.value = id;
-  output.textContent = `TODO: fetch bundlelist/${id}`;
+  output.textContent = 'Pobieranie danych o bundlach…';
+
+  try {
+    const bundles = await fetchBundleNames(id);
+    output.textContent = formatBundles(bundles);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Nieznany błąd';
+    output.textContent = `Nie udało się pobrać bundli: ${message}`;
+  }
 };
 
 document.getElementById('go')!.addEventListener('click', analyze);
