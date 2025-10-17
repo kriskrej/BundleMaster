@@ -162,6 +162,58 @@
         color: rgba(244, 245, 251, 0.75);
       }
 
+      .collapsible {
+        border-radius: 12px;
+        border: 1px solid rgba(156, 26, 255, 0.25);
+        background: rgba(20, 23, 33, 0.6);
+        padding: 0 18px 18px;
+      }
+
+      .collapsible[open] {
+        background: rgba(26, 29, 44, 0.75);
+      }
+
+      .collapsible__summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        list-style: none;
+        cursor: pointer;
+        padding: 18px 0;
+      }
+
+      .collapsible__summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .collapsible__summary::after {
+        content: '';
+        width: 12px;
+        height: 12px;
+        border-right: 2px solid rgba(244, 245, 251, 0.6);
+        border-bottom: 2px solid rgba(244, 245, 251, 0.6);
+        transform: rotate(-45deg);
+        transition: transform 0.2s ease;
+      }
+
+      .collapsible[open] .collapsible__summary::after {
+        transform: rotate(45deg);
+      }
+
+      .collapsible__badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 28px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: rgba(156, 26, 255, 0.25);
+        border: 1px solid rgba(156, 26, 255, 0.45);
+        font-size: 0.85rem;
+        font-weight: 600;
+      }
+
       .log-list {
         display: flex;
         flex-direction: column;
