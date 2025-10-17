@@ -33,21 +33,55 @@ export interface BundleInfo {
   name: string;
 }
 
-export async function fetchBundleNames(appId: string): Promise<BundleInfo[]> {
+export type BundleFetchLogLevel = 'info' | 'success' | 'warning' | 'error';
+
+export interface BundleFetchReporter {
+  log(message: string, level?: BundleFetchLogLevel): void;
+  detail?(title: string, body: string): void;
+}
+
+export interface BundleFetchOptions {
+  reporter?: BundleFetchReporter;
+}
+
+export async function fetchBundleNames(
+  appId: string,
+  options: BundleFetchOptions = {}
+): Promise<BundleInfo[]> {
   const cleanId = appId.trim();
   if (!cleanId) {
     throw new Error('AppID is required');
   }
 
-  const bundleIds = await fetchBundleIds(cleanId);
+  const reporter = options.reporter;
+  reporter?.log(`Normalizuję AppID: ${cleanId}`);
+
+  const bundleIds = await fetchBundleIds(cleanId, reporter);
   if (!bundleIds.length) {
+    reporter?.log('Nie znaleziono żadnych bundli powiązanych z tym AppID na stronie listy.', 'warning');
     return [];
   }
 
-  const bundles = await fetchBundleMetadata(bundleIds);
-  return deduplicateBundles(
-    bundles.filter((bundle): bundle is BundleInfo => Boolean(bundle?.name.trim()))
-  );
+  reporter?.log(`Rozpoczynam pobieranie metadanych dla ${bundleIds.length} bundli.`);
+  const bundles = await fetchBundleMetadata(bundleIds, reporter);
+  const filtered = bundles.filter((bundle): bundle is BundleInfo => Boolean(bundle?.name.trim()));
+  if (filtered.length !== bundles.length) {
+    reporter?.log(
+      `Odrzucono ${bundles.length - filtered.length} bundli bez nazwy po pobraniu metadanych.`,
+      'warning'
+    );
+  }
+
+  const unique = deduplicateBundles(filtered);
+  if (unique.length !== filtered.length) {
+    reporter?.log(
+      `Usunięto ${filtered.length - unique.length} zduplikowanych wpisów bundli po scaleniu wyników.`,
+      'warning'
+    );
+  }
+
+  reporter?.log(`Zakończono pobieranie bundli. Łącznie ${unique.length} unikalnych pozycji.`, 'success');
+  return unique;
 }
 
 export function extractBundlesFromHtml(html: string, appId: string): BundleInfo[] {
@@ -95,39 +129,75 @@ export function extractBundlesFromHtml(html: string, appId: string): BundleInfo[
   return deduplicateBundles(bundles);
 }
 
-async function fetchBundleIds(appId: string): Promise<string[]> {
+async function fetchBundleIds(appId: string, reporter?: BundleFetchReporter): Promise<string[]> {
   const url = `${BUNDLE_LIST_URL}${encodeURIComponent(appId)}`;
-  const response = await fetchFromSteam(url, 'bundle list page');
-  const html = await response.text();
-  const bundleIds = extractBundleIdsFromHtml(html);
+  const { body, url: finalUrl } = await fetchTextFromSteam(url, 'listy bundli', reporter);
+  reporter?.log(
+    `Pobrano listę bundli (${body.length} znaków) z adresu ${finalUrl}.`
+  );
+  const bundleIds = extractBundleIdsFromHtml(body);
+  reporter?.log(
+    `Wyodrębniono ${bundleIds.length} identyfikatorów bundli z kodu HTML listy.`
+  );
   if (!bundleIds.length) {
+    reporter?.log(
+      'Strona listy bundli nie zawierała żadnych identyfikatorów powiązanych bundli.',
+      'warning'
+    );
     return [];
   }
 
   return bundleIds;
 }
 
-async function fetchBundleMetadata(bundleIds: string[]): Promise<(BundleInfo | null)[]> {
+async function fetchBundleMetadata(
+  bundleIds: string[],
+  reporter?: BundleFetchReporter
+): Promise<(BundleInfo | null)[]> {
+  if (!bundleIds.length) {
+    return [];
+  }
+
   const limiter = createLimiter(4);
+  let completed = 0;
+  const total = bundleIds.length;
+
   return Promise.all(
     bundleIds.map((bundleId) =>
       limiter(async () => {
-        const bundleName = await fetchBundleName(bundleId);
+        reporter?.log(`Pobieranie danych dla bundla ${bundleId}.`);
+        const bundleName = await fetchBundleName(bundleId, reporter);
+        completed += 1;
+        reporter?.log(`Postęp pobierania metadanych: ${completed}/${total}.`);
         if (!bundleName) {
+          reporter?.log(
+            `Nie udało się ustalić nazwy bundla ${bundleId} – brak nagłówka na stronie.`,
+            'warning'
+          );
           return null;
         }
+        reporter?.log(`Zidentyfikowano bundla ${bundleId}: ${bundleName}.`, 'success');
         return { id: bundleId, name: bundleName };
       })
     )
   );
 }
 
-async function fetchBundleName(bundleId: string): Promise<string | null> {
+async function fetchBundleName(
+  bundleId: string,
+  reporter?: BundleFetchReporter
+): Promise<string | null> {
   const url = `${BUNDLE_PAGE_URL}${encodeURIComponent(bundleId)}?l=english&cc=us`;
-  const response = await fetchFromSteam(url, `bundle ${bundleId}`);
-  const html = await response.text();
-  const match = html.match(/<h2[^>]*class="pageheader"[^>]*>([^<]+)<\/h2>/i);
+  const { body, url: finalUrl } = await fetchTextFromSteam(url, `strony bundla ${bundleId}`, reporter);
+  reporter?.log(
+    `Pobrano stronę bundla ${bundleId} (${body.length} znaków) z adresu ${finalUrl}.`
+  );
+  const match = body.match(/<h2[^>]*class="pageheader"[^>]*>([^<]+)<\/h2>/i);
   if (!match) {
+    reporter?.log(
+      `Nie znaleziono elementu <h2 class="pageheader"> w treści bundla ${bundleId}.`,
+      'warning'
+    );
     return null;
   }
   return decodeHtmlEntities(match[1]).trim();
@@ -235,25 +305,67 @@ function decodeHtmlEntities(value: string): string {
     .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
 }
 
-async function fetchFromSteam(url: string, resourceDescription: string): Promise<Response> {
+async function fetchTextFromSteam(
+  url: string,
+  resourceDescription: string,
+  reporter?: BundleFetchReporter
+): Promise<{ url: string; body: string }> {
   const attemptedUrls: AttemptRecord[] = [];
   const urlsToTry = [url, ...getProxyUrls(url)];
 
-  for (const candidateUrl of urlsToTry) {
+  reporter?.log(
+    `Rozpoczynam pobieranie ${resourceDescription}. Dostępne adresy prób: ${urlsToTry.join(', ')}.`
+  );
+
+  for (let index = 0; index < urlsToTry.length; index += 1) {
+    const candidateUrl = urlsToTry[index];
+    const attemptNumber = index + 1;
+    reporter?.log(`Próba ${attemptNumber}: ${candidateUrl}`);
+
     try {
       const response = await fetch(candidateUrl);
       if (!response.ok) {
-        attemptedUrls.push({
-          url: candidateUrl,
-          error: new Error(`HTTP ${response.status} ${response.statusText || 'Unknown status'}`),
-        });
+        const statusError = new Error(
+          `HTTP ${response.status} ${response.statusText || 'Unknown status'}`
+        );
+        attemptedUrls.push({ url: candidateUrl, error: statusError });
+        reporter?.log(
+          `Serwer zwrócił błąd dla ${resourceDescription} (${candidateUrl}): ${statusError.message}.`,
+          'warning'
+        );
+        const body = await safeReadBody(response);
+        if (body) {
+          reporter?.detail?.(
+            `Odpowiedź serwera (${resourceDescription}, próba ${attemptNumber})`,
+            body
+          );
+        }
         continue;
       }
-      return response;
+
+      const body = await response.text();
+      reporter?.log(
+        `Sukces: ${resourceDescription} pobrano podczas próby ${attemptNumber} (${candidateUrl}).`,
+        'success'
+      );
+      reporter?.detail?.(
+        `Odpowiedź serwera (${resourceDescription}, próba ${attemptNumber})`,
+        body
+      );
+      return { url: candidateUrl, body };
     } catch (error) {
       attemptedUrls.push({ url: candidateUrl, error });
+      reporter?.log(
+        `Błąd sieci podczas próby ${attemptNumber} (${candidateUrl}): ${describeError(error)}.`,
+        'warning'
+      );
     }
   }
+
+  reporter?.log(
+    `Nie udało się pobrać ${resourceDescription} po ${attemptedUrls.length} próbach.`,
+    'error'
+  );
 
   const attemptsDescription = attemptedUrls
     .map((attempt, index) => `  ${index + 1}. ${attempt.url} → ${describeError(attempt.error)}`)
@@ -262,6 +374,14 @@ async function fetchFromSteam(url: string, resourceDescription: string): Promise
   throw new Error(
     `Failed to retrieve ${resourceDescription} from Steam after ${attemptedUrls.length} attempt(s):\n${attemptsDescription}`
   );
+}
+
+async function safeReadBody(response: Response): Promise<string> {
+  try {
+    return await response.text();
+  } catch (error) {
+    return `Nie udało się odczytać treści odpowiedzi: ${describeError(error)}`;
+  }
 }
 
 function getProxyUrls(url: string): string[] {
