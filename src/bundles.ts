@@ -1,5 +1,6 @@
 const BUNDLE_LIST_URL = 'https://store.steampowered.com/bundlelist/';
 const BUNDLE_PAGE_URL = 'https://store.steampowered.com/bundle/';
+const BUNDLE_LINK_REGEX = /https?:\/\/store\.steampowered\.com\/bundle\/(\d+)/gi;
 
 const isBrowserRuntime = typeof window !== 'undefined' && typeof window.document !== 'undefined';
 const runtimeProxy = (() => {
@@ -96,22 +97,12 @@ async function fetchBundleIds(appId: string): Promise<string[]> {
   const url = `${BUNDLE_LIST_URL}${encodeURIComponent(appId)}`;
   const response = await fetchFromSteam(url, 'bundle list page');
   const html = await response.text();
-  const match = html.match(/data-bundle_list="([^"]+)"/i);
-  if (!match) {
+  const bundleIds = extractBundleIdsFromHtml(html);
+  if (!bundleIds.length) {
     return [];
   }
 
-  try {
-    const parsed = JSON.parse(match[1]) as unknown;
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-    return parsed
-      .map((id) => String(id).trim())
-      .filter((id) => Boolean(id));
-  } catch (error) {
-    throw new Error('Failed to parse bundle list from bundle list page', { cause: error });
-  }
+  return bundleIds;
 }
 
 async function fetchBundleMetadata(bundleIds: string[]): Promise<(BundleInfo | null)[]> {
@@ -196,6 +187,38 @@ function deduplicateBundles(bundles: BundleInfo[]): BundleInfo[] {
     seen.add(bundle.id);
     return true;
   });
+}
+
+export function extractBundleIdsFromHtml(html: string): string[] {
+  const seen = new Set<string>();
+
+  const jsonMatch = html.match(/data-bundle_list="([^"]+)"/i);
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[1]) as unknown;
+      if (Array.isArray(parsed)) {
+        for (const value of parsed) {
+          const id = String(value).trim();
+          if (id) {
+            seen.add(id);
+          }
+        }
+      }
+    } catch (error) {
+      throw new Error('Failed to parse bundle list from bundle list page', { cause: error });
+    }
+  }
+
+  BUNDLE_LINK_REGEX.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = BUNDLE_LINK_REGEX.exec(html)) !== null) {
+    const id = match[1]?.trim();
+    if (id) {
+      seen.add(id);
+    }
+  }
+
+  return Array.from(seen);
 }
 
 function decodeHtmlEntities(value: string): string {

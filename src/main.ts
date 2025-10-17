@@ -23,7 +23,9 @@ app.innerHTML = `
 const appIdInput = document.getElementById('appid') as HTMLInputElement;
 const output = document.getElementById('out') as HTMLPreElement;
 
-const formatBundles = (bundles: { id: string; name: string }[]) => {
+type Bundle = { id: string; name: string };
+
+const formatBundles = (bundles: Bundle[]) => {
   if (!bundles.length) {
     return 'Brak bundli powiązanych z tą grą.';
   }
@@ -33,17 +35,74 @@ const formatBundles = (bundles: { id: string; name: string }[]) => {
     .join('\n');
 };
 
+const createLogger = (element: HTMLPreElement) => {
+  let bundles: Bundle[] | null = null;
+  let errorMessage: string | null = null;
+  const logLines: string[] = [];
+
+  const render = () => {
+    const logsSection = logLines.length ? logLines.join('\n') : 'Brak logów.';
+    const parts = [`Logi:`, logsSection, ''];
+
+    if (errorMessage) {
+      parts.push('Błąd:', errorMessage);
+    } else {
+      const bundleText = bundles ? formatBundles(bundles) : 'Oczekiwanie na wynik…';
+      parts.push('Wynik:', bundleText);
+    }
+
+    element.textContent = parts.join('\n');
+  };
+
+  const addLog = (message: string) => {
+    const timestamp = new Date().toLocaleTimeString();
+    logLines.push(`[${timestamp}] ${message}`);
+    render();
+  };
+
+  const setBundles = (bundleList: Bundle[]) => {
+    bundles = bundleList;
+    errorMessage = null;
+    render();
+  };
+
+  const setError = (message: string) => {
+    bundles = null;
+    errorMessage = message;
+    render();
+  };
+
+  const reset = () => {
+    bundles = null;
+    errorMessage = null;
+    logLines.length = 0;
+    render();
+  };
+
+  return { addLog, setBundles, setError, reset };
+};
+
+const logger = createLogger(output);
+
 const analyze = async () => {
   const id = appIdInput.value.trim() || DEFAULT_APP_ID;
   appIdInput.value = id;
-  output.textContent = 'Pobieranie danych o bundlach…';
+  logger.reset();
+  logger.addLog(`Rozpoczynam analizę dla AppID ${id}.`);
+  logger.addLog('Pobieranie danych o bundlach ze Steama…');
 
   try {
     const bundles = await fetchBundleNames(id);
-    output.textContent = formatBundles(bundles);
+    if (bundles.length) {
+      logger.addLog(`Otrzymano ${bundles.length} bundli powiązanych z grą.`);
+    } else {
+      logger.addLog('Źródła nie zwróciły żadnych bundli dla tego AppID.');
+    }
+    logger.setBundles(bundles);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Nieznany błąd';
-    output.textContent = `Nie udało się pobrać bundli: ${message}`;
+    logger.addLog('Wystąpił błąd podczas pobierania bundli.');
+    logger.setError(message);
   }
 };
 
