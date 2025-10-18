@@ -58,9 +58,17 @@ export interface BundleUpdateContext {
   isFinal: boolean;
 }
 
+export type BundleFetchDetailSection = 'bundles' | 'reviews' | 'other';
+
+export interface BundleFetchDetailEntry {
+  section: BundleFetchDetailSection;
+  title: string;
+  body: string;
+}
+
 export interface BundleFetchReporter {
   log(message: string, level?: BundleFetchLogLevel): void;
-  detail?(title: string, body: string): void;
+  detail?(entry: BundleFetchDetailEntry): void;
   progress?(update: BundleFetchProgress): void;
   bundles?(bundles: BundleInfo[], context: BundleUpdateContext): void;
 }
@@ -76,7 +84,8 @@ interface GameReviewSummary {
 
 const reviewSummaryCache = new Map<string, GameReviewSummary | null>();
 const reviewSummaryPromises = new Map<string, Promise<GameReviewSummary | null>>();
-const reviewFetchLimiter = createLimiter(4);
+const reviewFetchLimiter = createLimiter(1);
+let reviewRateLimitUntil = 0;
 
 export async function fetchBundleNames(
   appId: string,
@@ -238,7 +247,9 @@ export function extractBundlesFromHtml(html: string, appId: string): BundleInfo[
 
 async function fetchBundleIds(appId: string, reporter?: BundleFetchReporter): Promise<string[]> {
   const url = `${BUNDLE_LIST_URL}${encodeURIComponent(appId)}`;
-  const { body } = await fetchTextFromSteam(url, 'listy bundli', reporter);
+  const { body } = await fetchTextFromSteam(url, 'listy bundli', reporter, {
+    section: 'bundles',
+  });
   const bundleIds = extractBundleIdsFromHtml(body);
   reporter?.log(
     `Wyodrębniono ${bundleIds.length} identyfikatorów bundli z kodu HTML listy.`
@@ -312,7 +323,9 @@ async function fetchBundleDetails(
   reporter?: BundleFetchReporter,
 ): Promise<BundleInfo | null> {
   const url = `${BUNDLE_PAGE_URL}${encodeURIComponent(bundleId)}?l=english&cc=us`;
-  const { body } = await fetchTextFromSteam(url, `strony bundla ${bundleId}`, reporter);
+  const { body } = await fetchTextFromSteam(url, `strony bundla ${bundleId}`, reporter, {
+    section: 'bundles',
+  });
   const name = extractBundleTitle(body);
   if (!name) {
     reporter?.log(
@@ -479,6 +492,7 @@ async function fetchGameReviewSummary(
   }
 
   const task = reviewFetchLimiter(async () => {
+    await waitForReviewWindow(reporter);
     try {
       const url =
         `${APP_REVIEWS_URL}${encodeURIComponent(appId)}` +
@@ -487,6 +501,28 @@ async function fetchGameReviewSummary(
         url,
         `podsumowania recenzji gry ${appId}`,
         reporter,
+        {
+          section: 'reviews',
+          onRateLimit: async (info) => {
+            const waitMs = determineReviewRetryDelay(info.retryAfterMs);
+            if (waitMs <= 0) {
+              return { retryCurrent: false };
+            }
+
+            reviewRateLimitUntil = Date.now() + waitMs;
+            const seconds = Math.ceil(waitMs / 1000);
+            const retryDescription = info.retryAfterDate
+              ? `${seconds} s (do ${info.retryAfterDate})`
+              : `${seconds} s`;
+            reporter?.log(
+              `Limit zapytań recenzji został osiągnięty (HTTP ${info.status}). Wstrzymuję kolejne próby na ${retryDescription}.`,
+              'warning',
+            );
+            await delay(waitMs);
+            reviewRateLimitUntil = 0;
+            return { retryCurrent: true };
+          },
+        },
       );
       const parsed = JSON.parse(body) as unknown;
       const summary = extractQuerySummary(parsed);
@@ -770,6 +806,43 @@ function deduplicateGames(games: BundleGameInfo[]): BundleGameInfo[] {
   });
 }
 
+function determineReviewRetryDelay(retryAfterMs: number | null): number {
+  if (typeof retryAfterMs === 'number' && Number.isFinite(retryAfterMs) && retryAfterMs > 0) {
+    return retryAfterMs;
+  }
+  return 60_000;
+}
+
+async function waitForReviewWindow(reporter?: BundleFetchReporter) {
+  const now = Date.now();
+  if (reviewRateLimitUntil <= now) {
+    return;
+  }
+
+  const waitMs = Math.max(0, reviewRateLimitUntil - now);
+  if (waitMs <= 0) {
+    reviewRateLimitUntil = 0;
+    return;
+  }
+
+  const seconds = Math.ceil(waitMs / 1000);
+  reporter?.log(
+    `Oczekiwanie ${seconds} s na ponowne pobranie danych z API recenzji Steama (wykryty limit zapytań).`,
+    'info',
+  );
+  await delay(waitMs);
+  reviewRateLimitUntil = 0;
+}
+
+function delay(ms: number): Promise<void> {
+  if (ms <= 0) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 function createLimiter(limit: number) {
   if (!Number.isFinite(limit) || limit < 1) {
     return <T>(task: () => Promise<T>) => task();
@@ -872,19 +945,40 @@ function decodeHtmlEntities(value: string): string {
     .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
 }
 
+interface RateLimitInfo {
+  attemptNumber: number;
+  body: string;
+  retryAfterMs: number | null;
+  retryAfterDate: string | null;
+  status: number;
+  url: string;
+}
+
+interface RateLimitAction {
+  retryCurrent?: boolean;
+}
+
+interface SteamFetchOptions {
+  section?: BundleFetchDetailSection;
+  onRateLimit?: (info: RateLimitInfo) => Promise<RateLimitAction | void> | RateLimitAction | void;
+}
+
 async function fetchTextFromSteam(
   url: string,
   resourceDescription: string,
-  reporter?: BundleFetchReporter
+  reporter?: BundleFetchReporter,
+  options: SteamFetchOptions = {}
 ): Promise<{ url: string; body: string }> {
   const attemptedUrls: AttemptRecord[] = [];
   const urlsToTry = [url, ...getProxyUrls(url)];
+  const section = options.section ?? 'other';
 
   reporter?.log(
     `Rozpoczynam pobieranie ${resourceDescription}. Dostępne adresy prób: ${urlsToTry.join(', ')}.`
   );
 
-  for (let index = 0; index < urlsToTry.length; index += 1) {
+  let index = 0;
+  while (index < urlsToTry.length) {
     const candidateUrl = urlsToTry[index];
     const attemptNumber = index + 1;
     reporter?.log(`Próba ${attemptNumber}: ${candidateUrl}`);
@@ -892,21 +986,46 @@ async function fetchTextFromSteam(
     try {
       const response = await fetch(candidateUrl);
       if (!response.ok) {
+        const body = await safeReadBody(response);
+        if (body) {
+          reporter?.detail?.({
+            section,
+            title: `Odpowiedź serwera (${resourceDescription}, próba ${attemptNumber})`,
+            body,
+          });
+        }
+
         const statusError = new Error(
           `HTTP ${response.status} ${response.statusText || 'Unknown status'}`
         );
-        attemptedUrls.push({ url: candidateUrl, error: statusError });
+
+        if (response.status === 429 && options.onRateLimit) {
+          const rateInfo = extractRateLimitData(response, body);
+          const action = await options.onRateLimit({
+            attemptNumber,
+            body,
+            retryAfterMs: rateInfo.retryAfterMs,
+            retryAfterDate: rateInfo.retryAfterDate,
+            status: response.status,
+            url: candidateUrl,
+          });
+
+          if (action?.retryCurrent) {
+            continue;
+          }
+        }
+
         reporter?.log(
           `Serwer zwrócił błąd dla ${resourceDescription} (${candidateUrl}): ${statusError.message}.`,
           'warning'
         );
-        const body = await safeReadBody(response);
-        if (body) {
-          reporter?.detail?.(
-            `Odpowiedź serwera (${resourceDescription}, próba ${attemptNumber})`,
-            body
-          );
-        }
+        attemptedUrls.push({
+          url: candidateUrl,
+          error: statusError,
+          status: response.status,
+          body,
+        });
+        index += 1;
         continue;
       }
 
@@ -915,10 +1034,11 @@ async function fetchTextFromSteam(
         `Sukces: ${resourceDescription} pobrano podczas próby ${attemptNumber} (${candidateUrl}).`,
         'success'
       );
-      reporter?.detail?.(
-        `Odpowiedź serwera (${resourceDescription}, próba ${attemptNumber})`,
-        body
-      );
+      reporter?.detail?.({
+        section,
+        title: `Odpowiedź serwera (${resourceDescription}, próba ${attemptNumber})`,
+        body,
+      });
       return { url: candidateUrl, body };
     } catch (error) {
       attemptedUrls.push({ url: candidateUrl, error });
@@ -926,6 +1046,7 @@ async function fetchTextFromSteam(
         `Błąd sieci podczas próby ${attemptNumber} (${candidateUrl}): ${describeError(error)}.`,
         'warning'
       );
+      index += 1;
     }
   }
 
@@ -935,7 +1056,7 @@ async function fetchTextFromSteam(
   );
 
   const attemptsDescription = attemptedUrls
-    .map((attempt, index) => `  ${index + 1}. ${attempt.url} → ${describeError(attempt.error)}`)
+    .map((attempt, attemptIndex) => `  ${attemptIndex + 1}. ${attempt.url} → ${describeError(attempt.error)}`)
     .join('\n');
 
   throw new Error(
@@ -949,6 +1070,60 @@ async function safeReadBody(response: Response): Promise<string> {
   } catch (error) {
     return `Nie udało się odczytać treści odpowiedzi: ${describeError(error)}`;
   }
+}
+
+function extractRateLimitData(
+  response: Response,
+  body: string,
+): { retryAfterMs: number | null; retryAfterDate: string | null } {
+  const headerDelay = parseRetryAfterHeader(response.headers.get('retry-after'));
+  if (headerDelay !== null) {
+    return { retryAfterMs: headerDelay, retryAfterDate: null };
+  }
+
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    if (parsed && typeof parsed === 'object') {
+      const retryAfterValue = (parsed as { retryAfter?: unknown }).retryAfter;
+      if (typeof retryAfterValue === 'number' && Number.isFinite(retryAfterValue) && retryAfterValue >= 0) {
+        const retryAfterMs = retryAfterValue * 1000;
+        const retryAfterDate = (parsed as { retryAfterDate?: unknown }).retryAfterDate;
+        return {
+          retryAfterMs,
+          retryAfterDate: typeof retryAfterDate === 'string' ? retryAfterDate : null,
+        };
+      }
+    }
+  } catch (error) {
+    // Ignore JSON parsing errors – fallback below.
+    void error;
+  }
+
+  return { retryAfterMs: null, retryAfterDate: null };
+}
+
+function parseRetryAfterHeader(value: string | null): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const numeric = Number(trimmed);
+  if (Number.isFinite(numeric) && numeric >= 0) {
+    return numeric * 1000;
+  }
+
+  const timestamp = Date.parse(trimmed);
+  if (Number.isFinite(timestamp)) {
+    const diff = timestamp - Date.now();
+    return diff > 0 ? diff : 0;
+  }
+
+  return null;
 }
 
 function getProxyUrls(url: string): string[] {
@@ -993,4 +1168,6 @@ function describeError(error: unknown): string {
 interface AttemptRecord {
   url: string;
   error: unknown;
+  status?: number;
+  body?: string;
 }
