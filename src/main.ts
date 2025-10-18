@@ -48,9 +48,12 @@ type LogEntry = {
   message: string;
 };
 
+type DetailSection = 'bundles' | 'reviews' | 'other';
+
 type DetailEntry = {
   id: number;
   timestamp: string;
+  section: DetailSection;
   title: string;
   body: string;
 };
@@ -96,6 +99,12 @@ const createLogger = (element: HTMLDivElement) => {
   let lastLogKey: string | null = null;
   const detailKeys = new Set<string>();
 
+  const DETAIL_SECTION_TITLES: Record<DetailSection, string> = {
+    bundles: 'Pobieranie bundli',
+    reviews: 'Pobieranie recenzji',
+    other: 'Pozostałe odpowiedzi',
+  };
+
   const renderLogs = () => {
     if (!logEntries.length) {
       return '<div class="log-empty">Brak logów.</div>';
@@ -114,8 +123,8 @@ const createLogger = (element: HTMLDivElement) => {
       .join('');
   };
 
-  const renderDetailItems = () =>
-    detailEntries
+  const renderDetailItems = (entries: DetailEntry[]) =>
+    entries
       .map(
         (detail) => `
           <details class="detail-item">
@@ -248,9 +257,44 @@ const createLogger = (element: HTMLDivElement) => {
       });
 
     const logsMarkup = renderLogs();
-    const detailsMarkup =
-      detailEntries.length > 0
-        ? `
+    const groupedDetails: Record<DetailSection, DetailEntry[]> = {
+      bundles: [],
+      reviews: [],
+      other: [],
+    };
+
+    detailEntries.forEach((entry) => {
+      groupedDetails[entry.section].push(entry);
+    });
+
+    const renderDetailGroup = (section: DetailSection, entries: DetailEntry[]) => {
+      if (!entries.length) {
+        return '';
+      }
+
+      const sectionKey = `responses-${section}`;
+      const isOpen = previousStates.get(sectionKey);
+      const title = DETAIL_SECTION_TITLES[section];
+      return `
+        <details class="collapsible" data-section="${escapeHtml(sectionKey)}" ${
+          isOpen ? 'open' : ''
+        }>
+          <summary class="collapsible__summary">
+            <span class="section-title section-title--compact">${escapeHtml(title)}</span>
+            <span class="collapsible__badge">${entries.length}</span>
+          </summary>
+          <div class="detail-list">${renderDetailItems(entries)}</div>
+        </details>
+      `;
+    };
+
+    const detailGroupsMarkup = (['bundles', 'reviews', 'other'] as DetailSection[])
+      .map((section) => renderDetailGroup(section, groupedDetails[section]))
+      .filter(Boolean)
+      .join('');
+
+    const detailsMarkup = detailEntries.length
+      ? `
       <section class="logger-section">
         <details class="collapsible" data-section="responses" ${
           previousStates.get('responses') ? 'open' : ''
@@ -259,11 +303,11 @@ const createLogger = (element: HTMLDivElement) => {
             <span class="section-title">Odpowiedzi serwera</span>
             <span class="collapsible__badge">${detailEntries.length}</span>
           </summary>
-          <div class="detail-list">${renderDetailItems()}</div>
+          <div class="detail-groups">${detailGroupsMarkup}</div>
         </details>
       </section>
     `
-        : '';
+      : '';
     const progressMarkup = renderProgress();
     const bundlesMarkup = renderBundles();
 
@@ -307,8 +351,8 @@ const createLogger = (element: HTMLDivElement) => {
     render();
   };
 
-  const addDetail = (title: string, body: string) => {
-    const detailKey = `${title}::${body}`;
+  const addDetail = (entry: { section: DetailSection; title: string; body: string }) => {
+    const detailKey = `${entry.section}::${entry.title}::${entry.body}`;
     if (detailKeys.has(detailKey)) {
       return;
     }
@@ -319,8 +363,9 @@ const createLogger = (element: HTMLDivElement) => {
       {
         id: ++counter,
         timestamp: new Date().toLocaleTimeString(),
-        title,
-        body,
+        section: entry.section,
+        title: entry.title,
+        body: entry.body,
       },
     ];
     render();
@@ -403,8 +448,8 @@ const analyze = async () => {
       }));
       logger.setBundles(normalizedBundles, { isFinal: context.isFinal });
     },
-    detail: (title, body) => {
-      logger.addDetail(title, body);
+    detail: (entry) => {
+      logger.addDetail(entry);
     },
     progress: (info) => {
       logger.setProgress(info);
