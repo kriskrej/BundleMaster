@@ -285,7 +285,6 @@ async function fetchBundleMetadata(
   return Promise.all(
     bundleIds.map((bundleId) =>
       limiter(async () => {
-        reporter?.log(`Pobieranie danych dla bundla ${bundleId}.`);
         let result: BundleInfo | null = null;
         try {
           result = await fetchBundleDetails(bundleId, reporter);
@@ -524,7 +523,14 @@ async function fetchGameReviewSummary(
           },
         },
       );
-      const parsed = JSON.parse(body) as unknown;
+      const parsed = parseSteamJsonBody(body);
+      if (!parsed) {
+        reporter?.log(
+          `Odpowiedź z recenzjami gry ${appId} nie zawierała poprawnego JSON-a (query_summary).`,
+          'warning'
+        );
+        return null;
+      }
       const summary = extractQuerySummary(parsed);
       if (!summary) {
         reporter?.log(
@@ -589,6 +595,70 @@ function extractQuerySummary(source: unknown): Record<string, unknown> | null {
   }
 
   return candidate as Record<string, unknown>;
+}
+
+function parseSteamJsonBody<T = unknown>(raw: string): T | null {
+  const attempts = collectSteamJsonCandidates(raw);
+  for (const attempt of attempts) {
+    try {
+      return JSON.parse(attempt) as T;
+    } catch (error) {
+      void error;
+    }
+  }
+  return null;
+}
+
+function collectSteamJsonCandidates(raw: string): string[] {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  const attempts: string[] = [trimmed];
+  const markdownIndex = trimmed.indexOf('Markdown Content:');
+
+  if (markdownIndex >= 0) {
+    const markdown = trimmed.slice(markdownIndex + 'Markdown Content:'.length).trim();
+    if (markdown) {
+      attempts.push(markdown);
+      const jsonBlock = extractJsonBlock(markdown);
+      if (jsonBlock) {
+        attempts.push(jsonBlock);
+      }
+      for (const line of markdown.split(/\r?\n/)) {
+        const candidate = line.trim();
+        if (candidate && /^[\[{]/.test(candidate)) {
+          attempts.push(candidate);
+        }
+      }
+    }
+  }
+
+  const seen = new Set<string>();
+  return attempts.filter((attempt) => {
+    if (!attempt || seen.has(attempt)) {
+      return false;
+    }
+    seen.add(attempt);
+    return true;
+  });
+}
+
+function extractJsonBlock(source: string): string | null {
+  const objectStart = source.indexOf('{');
+  const objectEnd = source.lastIndexOf('}');
+  if (objectStart >= 0 && objectEnd >= objectStart) {
+    return source.slice(objectStart, objectEnd + 1).trim();
+  }
+
+  const arrayStart = source.indexOf('[');
+  const arrayEnd = source.lastIndexOf(']');
+  if (arrayStart >= 0 && arrayEnd >= arrayStart) {
+    return source.slice(arrayStart, arrayEnd + 1).trim();
+  }
+
+  return null;
 }
 
 function coerceToNumber(value: unknown): number | null {
@@ -970,18 +1040,15 @@ async function fetchTextFromSteam(
   options: SteamFetchOptions = {}
 ): Promise<{ url: string; body: string }> {
   const attemptedUrls: AttemptRecord[] = [];
-  const urlsToTry = [url, ...getProxyUrls(url)];
+  const urlsToTry = collectFetchCandidates(url);
   const section = options.section ?? 'other';
 
-  reporter?.log(
-    `Rozpoczynam pobieranie ${resourceDescription}. Dostępne adresy prób: ${urlsToTry.join(', ')}.`
-  );
+  reporter?.log(`Pobieranie ${resourceDescription}. Dostępne ${urlsToTry.length} próby.`);
 
   let index = 0;
   while (index < urlsToTry.length) {
     const candidateUrl = urlsToTry[index];
     const attemptNumber = index + 1;
-    reporter?.log(`Próba ${attemptNumber}: ${candidateUrl}`);
 
     try {
       const response = await fetch(candidateUrl);
@@ -1016,7 +1083,7 @@ async function fetchTextFromSteam(
         }
 
         reporter?.log(
-          `Serwer zwrócił błąd dla ${resourceDescription} (${candidateUrl}): ${statusError.message}.`,
+          `Próba ${attemptNumber} dla ${resourceDescription} zakończyła się błędem: ${statusError.message}.`,
           'warning'
         );
         attemptedUrls.push({
@@ -1031,7 +1098,7 @@ async function fetchTextFromSteam(
 
       const body = await response.text();
       reporter?.log(
-        `Sukces: ${resourceDescription} pobrano podczas próby ${attemptNumber} (${candidateUrl}).`,
+        `Pobrano ${resourceDescription} podczas próby ${attemptNumber}.`,
         'success'
       );
       reporter?.detail?.({
@@ -1043,7 +1110,7 @@ async function fetchTextFromSteam(
     } catch (error) {
       attemptedUrls.push({ url: candidateUrl, error });
       reporter?.log(
-        `Błąd sieci podczas próby ${attemptNumber} (${candidateUrl}): ${describeError(error)}.`,
+        `Próba ${attemptNumber} dla ${resourceDescription} zakończyła się błędem sieci: ${describeError(error)}.`,
         'warning'
       );
       index += 1;
@@ -1143,6 +1210,22 @@ function getProxyUrls(url: string): string[] {
       seen.add(candidate);
       return true;
     });
+}
+
+function collectFetchCandidates(url: string): string[] {
+  const seen = new Set<string>();
+  const candidates = [...getProxyUrls(url), url];
+  const result: string[] = [];
+
+  for (const candidate of candidates) {
+    if (!candidate || seen.has(candidate)) {
+      continue;
+    }
+    seen.add(candidate);
+    result.push(candidate);
+  }
+
+  return result;
 }
 
 function normalizeProxy(value: string): string {
