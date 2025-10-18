@@ -28,6 +28,15 @@ app.innerHTML = `
 
 const appIdInput = document.getElementById('appid') as HTMLInputElement;
 const output = document.getElementById('out') as HTMLDivElement;
+const analyzeButton = document.getElementById('go') as HTMLButtonElement;
+
+const BUTTON_LABEL_DEFAULT = analyzeButton.textContent?.trim() || 'Analizuj';
+const BUTTON_LABEL_BUSY = 'Analizuję…';
+
+const setAnalyzing = (active: boolean) => {
+  analyzeButton.disabled = active;
+  analyzeButton.textContent = active ? BUTTON_LABEL_BUSY : BUTTON_LABEL_DEFAULT;
+};
 
 type BundleGame = {
   appId: string;
@@ -418,6 +427,11 @@ const createLogger = (element: HTMLDivElement) => {
 const logger = createLogger(output);
 
 const analyze = async () => {
+  if (analyzeButton.disabled) {
+    return;
+  }
+
+  setAnalyzing(true);
   const id = appIdInput.value.trim() || DEFAULT_APP_ID;
   appIdInput.value = id;
   logger.reset();
@@ -469,14 +483,17 @@ const analyze = async () => {
     logger.logError('Wystąpił błąd podczas pobierania bundli.');
     logger.setError(message);
   } finally {
+    setAnalyzing(false);
     logger.setProgress(null);
   }
 };
 
-document.getElementById('go')!.addEventListener('click', analyze);
+analyzeButton.addEventListener('click', () => {
+  void analyze();
+});
 
 appIdInput.addEventListener('keydown', (event: KeyboardEvent) => {
-  if (event.key === 'Enter') {
-    analyze();
+  if (event.key === 'Enter' && !analyzeButton.disabled) {
+    void analyze();
   }
 });

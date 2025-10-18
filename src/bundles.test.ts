@@ -59,6 +59,13 @@ Spray Paint Simulator
 More like this
 `;
 
+const wrapProxyJson = (url: string, data: unknown) => `Title:
+
+URL Source: ${url}
+
+Markdown Content:
+${JSON.stringify(data)}`;
+
 const createBundlePage = (name: string, mainAppId: string, extraAppId: string) => `
   <h2 class="pageheader">${name}</h2>
   <a class="tab_item" data-ds-appid="${mainAppId}" data-ds-review-count="2222" data-ds-review-percentage="84" data-ds-price-final="2499">
@@ -252,10 +259,15 @@ test('fetchBundleNames falls back to proxy URLs when direct requests fail due to
       : input?.toString?.() ?? ''
   );
 
-  expect(attemptedUrls).toContain(directBundleListUrl);
-  expect(attemptedUrls).toContain(proxyBundleListUrl);
-  expect(attemptedUrls).toContain(directBundleUrl('100'));
-  expect(attemptedUrls).toContain(proxyBundleUrl('100'));
+  const expectedProxyCalls = [
+    proxyBundleListUrl,
+    proxyBundleUrl('100'),
+    proxyBundleUrl('200'),
+  ];
+
+  expect(attemptedUrls).toHaveLength(expectedProxyCalls.length);
+  expect([...new Set(attemptedUrls)].sort()).toEqual([...expectedProxyCalls].sort());
+  expect(attemptedUrls.every((value) => value.startsWith('https://r.jina.ai/'))).toBe(true);
 });
 
 test('fetchBundleNames extracts titles from sanitized markdown bundle pages', async () => {
@@ -274,18 +286,7 @@ test('fetchBundleNames extracts titles from sanitized markdown bundle pages', as
   const reviewResponses = new Map<string, string>([
     [
       proxyReviewUrl('1190970'),
-      JSON.stringify({
-        success: 1,
-        query_summary: {
-          total_reviews: 120,
-          total_positive: 90,
-          total_negative: 30,
-        },
-      }),
-    ],
-    [
-      `https://cors.isomorphic-git.org/${reviewUrl('1190970')}`,
-      JSON.stringify({
+      wrapProxyJson(reviewUrl('1190970'), {
         success: 1,
         query_summary: {
           total_reviews: 120,
@@ -296,18 +297,7 @@ test('fetchBundleNames extracts titles from sanitized markdown bundle pages', as
     ],
     [
       proxyReviewUrl('1811340'),
-      JSON.stringify({
-        success: 1,
-        query_summary: {
-          total_reviews: 10,
-          total_positive: 7,
-          total_negative: 3,
-        },
-      }),
-    ],
-    [
-      `https://cors.isomorphic-git.org/${reviewUrl('1811340')}`,
-      JSON.stringify({
+      wrapProxyJson(reviewUrl('1811340'), {
         success: 1,
         query_summary: {
           total_reviews: 10,

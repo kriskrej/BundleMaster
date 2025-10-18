@@ -131,6 +131,19 @@
         transform: translateY(0);
       }
 
+      .analyze-button:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+        box-shadow: none;
+        transform: none;
+      }
+
+      .analyze-button:disabled:hover,
+      .analyze-button:disabled:focus-visible {
+        transform: none;
+        box-shadow: none;
+      }
+
       .output {
         margin: 0;
         padding: 28px;
